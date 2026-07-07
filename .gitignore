@@ -1,0 +1,12 @@
+# editor / swap files
+*~
+*.swp
+*.swo
+.DS_Store
+
+# in-tree run outputs, in case RUNDIR is redirected to the repo
+console.log
+qmp-sock
+qemu.pid
+boot_id
+results/

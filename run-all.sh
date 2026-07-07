@@ -1,0 +1,89 @@
+#!/bin/bash
+# Host-side CXL BI test orchestrator: boots each topology, pushes the
+# guest driver, runs the suite, collects TAP + dmesg. Exit 0 iff all
+# suites pass.
+BI_TESTS_DIR="$(dirname "$(readlink -f "$0")")"
+source "$BI_TESTS_DIR/topo-lib.sh"
+OUT=${OUT:-$RUNDIR/results}
+mkdir -p "$OUT"
+TOTAL_FAIL=0
+
+run_suite() { # run_suite <topo-script> <suite>
+	local topo=$1 suite=$2
+	echo "=== $suite ($(basename "$topo")) ==="
+	"$topo" || { echo "launch failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return; }
+	if ! wait_for_guest 180; then
+		echo "guest boot failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return
+	fi
+	guest_scp "$BI_TESTS_DIR/guest/run-tests.sh" root@localhost:/tmp/ \
+		>/dev/null
+	guest_ssh "dmesg -C; bash /tmp/run-tests.sh $suite" \
+		| tee "$OUT/$suite.tap"
+	local rc=${PIPESTATUS[0]}
+	guest_ssh "dmesg" > "$OUT/$suite.dmesg" 2>/dev/null
+
+	# t2 phase 2 exercises the unbind/rebind lifecycle. The BI enable
+	# is registered as a devm action on cxlmd->dev; unbind must clear
+	# BI on the device and every dport; rebind must re-enable.
+	if [ "$suite" = t2 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t2 phase 2: unbind/rebind lifecycle ---"
+		guest_scp "$BI_TESTS_DIR/guest/unbindrebind-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "dmesg -C; bash /tmp/unbindrebind-phase.sh" \
+			| tee "$OUT/t2-unbindrebind.tap"
+		local rc2=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t2-unbindrebind.dmesg" 2>/dev/null
+		[ "$rc2" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
+	# t5 (2-way interleave) phase 2 exercises nr_bi refcount on the
+	# shared root port when one endpoint's memdev is hot-removed.
+	if [ "$suite" = t5 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t5 phase 2: shared RP nr_bi refcount ---"
+		guest_scp "$BI_TESTS_DIR/guest/nrbi-refcount-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "dmesg -C; bash /tmp/nrbi-refcount-phase.sh" \
+			| tee "$OUT/t5-nrbi.tap"
+		local rc2=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t5-nrbi.dmesg" 2>/dev/null
+		[ "$rc2" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
+	[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	stop_qemu
+}
+
+# suite -> topology script
+declare -A TOPO=(
+	[t1]=t1-direct.sh
+	[t2]=t2-switch.sh
+	[t3]=t3-hdmh-cfmws.sh
+	[t4]=t4-nobi-dev.sh
+	[t5]=t5-2way.sh
+	[t6]=t6-usp-nort.sh
+	[t7]=t7-noflit-uplink.sh
+	[t8]=t8-noflit-dsp.sh
+	[t9]=t9-cascade.sh
+	[t10]=t10-cross-rp.sh
+)
+# Default order: happy paths first, then mixed configs / fail-closed
+# gates, then the deeper topologies. Later suites depend on the earlier
+# invariants (region create, root cap_bi, endpoint bi) already passing.
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10"
+
+# No args: run everything. Otherwise run only the named suites, e.g.
+#   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)
+#   ./run-all.sh t4 t8       # a subset
+SUITES="${*:-$ORDER}"
+for s in $SUITES; do
+	topo=${TOPO[$s]}
+	if [ -z "$topo" ]; then
+		echo "unknown suite '$s' (choices: $ORDER)" >&2
+		exit 2
+	fi
+	run_suite "$BI_TESTS_DIR/topos/$topo" "$s"
+done
+
+echo "==================================================="
+echo "suites failed: $TOTAL_FAIL (results in $OUT)"
+exit $((TOTAL_FAIL != 0))
