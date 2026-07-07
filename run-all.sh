@@ -11,6 +11,16 @@ TOTAL_FAIL=0
 run_suite() { # run_suite <topo-script> <suite>
 	local topo=$1 suite=$2
 	echo "=== $suite ($(basename "$topo")) ==="
+
+	# Host-only suites (t13 etc.) run the topology script directly on
+	# the host and emit TAP without booting a guest.
+	if [[ "$HOST_ONLY_SUITES" == *" $suite "* ]]; then
+		"$topo" | tee "$OUT/$suite.tap"
+		local rc=${PIPESTATUS[0]}
+		[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+		return
+	fi
+
 	"$topo" || { echo "launch failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return; }
 	if ! wait_for_guest 180; then
 		echo "guest boot failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return
@@ -65,11 +75,20 @@ declare -A TOPO=(
 	[t8]=t8-noflit-dsp.sh
 	[t9]=t9-cascade.sh
 	[t10]=t10-cross-rp.sh
+	[t11]=t11-pmem.sh
+	[t12]=t12-mixed-iw.sh
+	[t13]=t13-hostonly-bi.sh
+	[t14]=t14-mixed-cfmws.sh
 )
+# Host-only suites (no booted guest). t13 is a negative launch: the
+# topology script itself runs QEMU with an invalid CFMWS combo and
+# emits TAP directly from the host side. run_suite handles it below.
+HOST_ONLY_SUITES=" t13 "
 # Default order: happy paths first, then mixed configs / fail-closed
-# gates, then the deeper topologies. Later suites depend on the earlier
-# invariants (region create, root cap_bi, endpoint bi) already passing.
-ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10"
+# gates, then the deeper topologies, then the guest-less checks. Later
+# suites depend on earlier invariants (region create, root cap_bi,
+# endpoint bi) already passing.
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t13"
 
 # No args: run everything. Otherwise run only the named suites, e.g.
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)

@@ -33,13 +33,13 @@ wire behaviour is out of scope. What we do check:
 
 ## Topologies
 
-Ten topology scripts under `topos/`, each one small, each one varying
-one axis so the fail-closed gate under test is isolated.
+Fourteen topology scripts under `topos/`, each one small, each one
+varying one axis so the fail-closed gate under test is isolated.
 
 | Suite | Topology | What it exercises |
 |-------|----------|-------------------|
 | **t1** | Endpoint directly under an RP, no switch, BI CFMWS | Minimal happy path: single-dport walk. |
-| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | Full switched happy path. Phase 2 drives unbind/rebind lifecycle. |
+| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | Full switched happy path. Phase 2 drives unbind/rebind lifecycle. Also exercises `decoders_committed`, `create_ram_region` visibility, and no-`mismatch decoder type` WARN. |
 | **t3** | Same as t2 but the CFMWS carries no BI restriction | HDM-H region; `cap_bi=0`; endpoint `bi=0`. |
 | **t4** | Endpoint without `hdm-db`, BI CFMWS | Region attach rejects with "BI not enabled on device". |
 | **t5** | Two BI endpoints sharing one switch, BI CFMWS | 2-way HDM-DB region; both endpoints `bi=1`. Phase 2 drives the shared-RP `nr_bi` refcount case. |
@@ -48,6 +48,10 @@ one axis so the fail-closed gate under test is isolated.
 | **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | The v5 cover-letter mixed-config case. |
 | **t9** | Two cascaded switches, BI CFMWS | Two-level `cxl_bi_setup` walk. |
 | **t10** | Two endpoints under **different** RPs, BI CFMWS | Independent BI walks per RP; optional 2-way cross-RP region. |
+| **t11** | Endpoint with `persistent-memdev`, BI CFMWS | `create_pmem_region` on the BI root; endpoint `mode=pmem`; region `target_type=accelerator`. |
+| **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | Independent BI walks; 2-way attach rejects the non-BI target. |
+| **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | Negative launch: QEMU must refuse per CXL 4.0 9.14.3. No guest boot. |
+| **t14** | Two CFMWS (BI + HDM-H) with two endpoints under separate pxb | Multiple root decoders coexist with distinct `cap_bi`; cross-assignment rejects. |
 
 ## Layout
 
@@ -66,7 +70,11 @@ cxl-bi-tests/
 │   ├── t7-noflit-uplink.sh
 │   ├── t8-noflit-dsp.sh
 │   ├── t9-cascade.sh
-│   └── t10-cross-rp.sh
+│   ├── t10-cross-rp.sh
+│   ├── t11-pmem.sh
+│   ├── t12-mixed-iw.sh
+│   ├── t13-hostonly-bi.sh          # host-only negative launch
+│   └── t14-mixed-cfmws.sh
 └── guest/
     ├── run-tests.sh                # in-guest TAP driver, one case per suite
     ├── unbindrebind-phase.sh       # t2 phase 2: cxl_bi_dealloc/setup lifecycle
@@ -173,3 +181,12 @@ Failures map to specific root causes:
 - t6 (USP without BI RT) is currently indistinguishable from t2 in
   upstream QEMU. It is included as a documentation marker; add a
   future `x-bi-rt=off` knob on `cxl-upstream` to make it distinct.
+- t13 is a host-only negative launch and does not use the guest
+  driver; it captures QEMU's stderr and grep's for the expected
+  `host-only coherent + back-invalidate` refusal message. If QEMU's
+  wording changes, adjust the regex there.
+- t12 identifies the BI vs non-BI endpoint by trying to commit an
+  HDM-DB region on each; on a topology where cxl_bi_setup succeeds on
+  both (e.g. a future QEMU that emulates BI on the non-`hdm-db` device
+  too) the classification will need to switch to a positive `cap_bi`
+  probe on the endpoint side.
