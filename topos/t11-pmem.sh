@@ -4,7 +4,7 @@
 # Same shape as t2 (endpoint under a switch, BI CFMWS) but the backing
 # memory is persistent-memdev, so the tests exercise:
 #   - can_create_pmem visibility on the BI root decoder (must be 1 for
-#     an HDM-DB PMEM CFMWS: F_DEVMEM | F_BI | F_PMEM per patch 4)
+#     an HDM-DB PMEM CFMWS: F_DEVMEM | F_BI | F_PMEM)
 #   - create_pmem_region on the BI root
 #   - endpoint mode=pmem and endpoint decoder bi=1 after commit
 #

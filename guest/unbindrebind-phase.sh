@@ -1,11 +1,10 @@
 #!/bin/bash
 # t2 phase 2: unbind/rebind lifecycle.
 #
-# Invariant (patch 2): cxl_bi_setup registers cxl_bi_dealloc as a devm
-# action on cxlmd->dev. On cxl_mem unbind, dealloc must clear BI on
-# the device and every dport in the path. Rebind must re-enable BI
-# and re-arm the endpoint decoder to reach bi=1 when the region is
-# rebuilt.
+# cxl_bi_setup registers cxl_bi_dealloc as a devm action on
+# cxlmd->dev. On cxl_mem unbind, dealloc must clear BI on the device
+# and every dport in the path. Rebind must re-enable BI and re-arm
+# the endpoint decoder to reach bi=1 when the region is rebuilt.
 #
 # Output: TAP-ish, exit 0 iff all checks pass.
 

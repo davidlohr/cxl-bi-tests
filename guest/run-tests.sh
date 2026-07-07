@@ -1,18 +1,21 @@
 #!/bin/bash
 # In-guest CXL BI test driver. TAP-ish output on stdout.
-# Usage: run-tests.sh <suite>   (suite: t1 | t2 | t3 | t4 | t5 | t6 |
-#                                       t7 | t8 | t9 | t10)
+# Usage: run-tests.sh <suite>   (see topos/ for the suite list)
 #
-# Invariants exercised (kernel v6 BI series):
-#  - patch 1: BI regs mapped inside the dport devres group (leak fix).
-#  - patch 2: cxl_bi_setup enables BI on every dport in the path;
-#             rollback skips the failed dport (Richard).
-#  - patch 3: HDM Supported Coherency Models drive endpoint default
-#             target_type; pre-committed BI decoders rejected -ENXIO.
-#  - patch 4: root cap_bi from CFMWS BI restriction; region type
-#             derived from root decoder F_BI at userspace create;
-#             endpoint bi=1 iff committed in HDM-DB region.
-#  - patch 5: F_TYPE2/F_TYPE3 renamed to F_DEVMEM/F_HOSTONLY.
+# BI invariants exercised across the suites:
+#  - Register probing: BI Decoder / BI Route Table caps map inside the
+#    dport devres group so a hot-remove/hot-add cycle is clean.
+#  - Topology walk: cxl_bi_setup enables BI on every dport in the path
+#    device -> DSP -> USP -> RP; failure rolls back only the dports
+#    that fully enabled, skipping the failed one.
+#  - HDM decoder init: cxl_hdm_decoder->supported_coherency drives the
+#    endpoint decoder's default target_type; a decoder already
+#    committed with the HDM BI bit set is rejected (-ENXIO).
+#  - Root decoder ABI: cap_bi tracks the CFMWS BI restriction; a
+#    region created under a BI root inherits DEVMEM (HDM-DB), otherwise
+#    HOSTONLYMEM (HDM-H).
+#  - Endpoint decoder ABI: bi reads 1 iff the decoder is committed in
+#    an HDM-DB region with the device in BI.
 
 SUITE=${1:-t2}
 CXL=/sys/bus/cxl/devices
@@ -75,7 +78,7 @@ all_mems() { # list of memN sorted by BDF for reproducibility
 	for m in $CXL/mem*; do basename "$m"; done | sort
 }
 # A committed HDM-DB region propagates its type into every attached
-# endpoint decoder's target_type (patch 4, cxl_rr_assign_decoder). The
+# endpoint decoder's target_type via cxl_rr_assign_decoder(). The
 # region itself has no target_type sysfs file - use the endpoint
 # decoder's target_type_show: "accelerator" for DEVMEM, "expander" for
 # HOSTONLYMEM.
@@ -121,8 +124,8 @@ destroy_region() {
 }
 
 # ---------- generic invariants -----------------------------------
-# Every root decoder must expose cap_bi (added by patch 4) whether it
-# is set or not. Verify presence + a valid 0/1 value.
+# Every root decoder must expose cap_bi whether it is set or not.
+# Verify presence + a valid 0/1 value.
 check_cap_bi_present() {
 	local d v n=0
 	for d in $CXL/decoder0.*; do
@@ -153,8 +156,8 @@ check_endpoint_bi_present() {
 	ok "bi present on all endpoint decoders ($n found)"
 }
 
-# Switch decoders must NOT expose cap_bi or bi (patch 4 only added them
-# to root and endpoint groups respectively).
+# Switch decoders must NOT expose cap_bi or bi - those files live
+# only on root decoders and endpoint decoders respectively.
 check_no_switch_bi_files() {
 	local d bad=0
 	for d in $CXL/decoder*; do
@@ -207,9 +210,9 @@ saw_setup_failure() {
 		fail "dmesg reflects BI-disabled topology"
 	fi
 }
-# patch 4 relaxes cxl_rr_assign_decoder's WARN_ONCE for HDM-DB regions;
-# any lingering "mismatch decoder type" warning on a BI attach is a
-# regression.
+# cxl_rr_assign_decoder's WARN_ONCE("mismatch decoder type") must not
+# fire for a HDM-DB attach: the endpoint decoder's target_type is
+# inherited from the region's type via cxl_rr_assign_decoder itself.
 no_type_mismatch_warn() {
 	if dmesg | grep -q "mismatch decoder type"; then
 		fail "no 'mismatch decoder type' WARN across BI attach"
@@ -218,10 +221,10 @@ no_type_mismatch_warn() {
 	fi
 }
 
-# create_region_region_visible <root_decoder>
+# check_create_visibility <root_decoder>
 # Returns 0 if the given root decoder exposes create_ram_region or
-# create_pmem_region files matching its cap_ram / cap_pmem flags. Patch
-# 4 flipped can_create_ram/can_create_pmem to accept either HDM-H
+# create_pmem_region files matching its cap_ram / cap_pmem flags. The
+# kernel's can_create_ram/can_create_pmem accept either HDM-H
 # (F_HOSTONLY|F_RAM) or HDM-DB (F_DEVMEM|F_BI|F_RAM); we verify the
 # visibility algebra matches the flags.
 check_create_visibility() { # <root_decoder>

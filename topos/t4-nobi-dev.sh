@@ -1,9 +1,9 @@
 #!/bin/bash
 # t4-nobi-dev.sh - non-BI device (no hdm-db) in a BI-restricted CFMWS.
 #
-# Same switched topology as t2, but the endpoint has hdm-db=off. This
-# is the v5 cover letter's "Type3 device does not support BI, but CFMW
-# has BI restriction" case.
+# Same switched topology as t2, but the endpoint has hdm-db=off.
+# Models a non-BI-capable Type 3 device placed against an HDM-DB
+# window: the mismatch must be caught at region attach.
 # Expectations:
 #   - cxl_bi_setup finds the endpoint's BI Decoder capability absent
 #     and returns 0 silently; cxlds->bi stays 0.

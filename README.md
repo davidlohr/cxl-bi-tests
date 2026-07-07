@@ -5,9 +5,10 @@ runs an in-guest driver that exercises the kernel's HDM-DB region path,
 the `cxl_bi_setup`/`cxl_bi_dealloc` lifecycle, and the fail-closed gates
 around 256B Flit mode and the CFMWS BI restriction.
 
-The kernel side is the v6 series *cxl: Support Back-Invalidate* on top of
-`torvalds/master`; the QEMU side is upstream with the `hdm-db`,
-`x-256b-flit`, and `cxl-fmw.N.back-invalidate` support already merged.
+Requires a Linux kernel with CXL Back-Invalidate support (HDM-DB
+regions, `cxl_bi_setup`/`cxl_bi_dealloc`, root `cap_bi` and endpoint
+`bi` sysfs attributes) and a QEMU with `hdm-db`, `x-256b-flit`, and
+`cxl-fmw.N.back-invalidate` available on the CXL machine/devices.
 
 ## Scope
 
@@ -15,18 +16,18 @@ The suite validates enumeration, region provisioning, and lifetime
 management. There is no BI data path here: BISnp/BIRsp wire behaviour
 is out of scope (QEMU does not emulate it). What we do check:
 
-- Root decoder ABI: `cap_bi` from CFMWS BI restriction (patch 4).
+- Root decoder ABI: `cap_bi` tracks the CFMWS BI restriction.
 - Endpoint decoder ABI: `bi` reflects HDM-DB configuration state.
 - `cxl_bi_setup` walk: verify the topology, enable BI on every dport,
   set `cxlds->bi`. Fail-closed on missing 256B Flit or missing BI
-  Decoder capability anywhere in the path (patch 2).
+  Decoder capability anywhere in the path.
 - `cxl_region_attach` gates: reject BI-flavored region attach when the
-  device isn't BI (patch 4), or when the HDM's supported coherency is
+  device isn't BI, or when the HDM's supported coherency is
   incompatible with the region type.
 - Unbind/rebind lifecycle: `cxl_bi_dealloc` on unbind, fresh enable on
   rebind, shared-RP `nr_bi` refcount across two endpoints.
 - Devres hygiene: hot-add/hot-remove does not leak the dport BI Decoder
-  mapping (regression cover for the patch 1 fix Richard flagged).
+  mapping.
 
 ## Topologies
 
@@ -42,41 +43,13 @@ varying one axis so the fail-closed gate under test is isolated.
 | **t5** | Two BI endpoints sharing one switch and one RP, BI CFMWS | A 2-way HDM-DB region commits with both endpoints in BI. Phase 2 verifies the shared RP keeps BI enabled while any child still needs it (`nr_bi` refcount) and that rebinding one endpoint does not leak the dport BI Decoder mapping. |
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
 | **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
-| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop. The v5 cover-letter mixed-config case. Emits TAP `# SKIP` today — see Known limitations. |
+| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop (a CXL 4.0 §9.14.3 mixed configuration). Emits TAP `# SKIP` today — see Known limitations. |
 | **t9** | Cascaded switches (two switch pairs), BI CFMWS | BI enables through both switch layers; an HDM-DB region commits across the cascade. |
 | **t10** | Two endpoints under **different** RPs, BI CFMWS | Each RP gets its own independent BI setup; an HDM-DB region commits (2-way cross-RP when the root allows it, otherwise a per-RP 1-way). |
 | **t11** | Endpoint with persistent memdev, BI CFMWS | An HDM-DB PMEM region commits and the endpoint reports `bi=1`. |
 | **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | A 2-way region attach across both rejects the non-BI target. |
 | **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | QEMU must refuse the launch (CXL 4.0 §9.14.3). No guest boot. |
 | **t14** | Two CFMWS (BI + HDM-H) with two endpoints, BI CFMWS on one | BI and HDM-H root decoders coexist; endpoints bind to the correct one and cross-assignment rejects. |
-
-## Layout
-
-```
-cxl-bi-tests/
-├── README.md
-├── topo-lib.sh         # QEMU launcher + guest_ssh helpers
-├── run-all.sh          # orchestrator (TAP + dmesg per suite)
-├── topos/
-│   ├── t1-direct.sh
-│   ├── t2-switch.sh
-│   ├── t3-hdmh-cfmws.sh
-│   ├── t4-nobi-dev.sh
-│   ├── t5-2way.sh
-│   ├── t6-usp-nort.sh
-│   ├── t7-noflit-uplink.sh
-│   ├── t8-noflit-dsp.sh
-│   ├── t9-cascade.sh
-│   ├── t10-cross-rp.sh
-│   ├── t11-pmem.sh
-│   ├── t12-mixed-iw.sh
-│   ├── t13-hostonly-bi.sh          # host-only negative launch
-│   └── t14-mixed-cfmws.sh
-└── guest/
-    ├── run-tests.sh                # in-guest TAP driver, one case per suite
-    ├── unbindrebind-phase.sh       # t2 phase 2: cxl_bi_dealloc/setup lifecycle
-    └── nrbi-refcount-phase.sh      # t5 phase 2: shared-RP nr_bi refcount
-```
 
 ## Configuration
 
@@ -85,7 +58,7 @@ Environment variables consumed by `topo-lib.sh`:
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `QEMU` | `$HOME/code/qemu-upstream/build/qemu-system-x86_64` | QEMU binary. |
-| `KERNEL` | `$HOME/code/linux-torvalds/arch/x86/boot/bzImage` | bzImage with the v6 BI series. |
+| `KERNEL` | `$HOME/code/linux-torvalds/arch/x86/boot/bzImage` | bzImage with CXL BI support enabled. |
 | `IMG` | `$HOME/img/cxl-test.qcow2` | Guest rootfs. |
 | `ROOTDEV` | `/dev/sda1` | Guest root partition. |
 | `SSH_KEY` | *(unset)* | Optional ssh identity file. |
@@ -127,54 +100,53 @@ and `t5` additionally emit `t2-unbindrebind.{tap,dmesg}` and
 
 ## Kernel invariants each suite locks in
 
-The series has five patches; each fail-closed gate lives in one of them
-so the mapping is worth writing down:
+Mapping from BI kernel behavior to the suites that lock it in:
 
-- **Patch 1** (`cxl: Add BI register probing and port initialization`) —
-  covered by every suite that reaches region commit: if the dport BI
-  Decoder mapping ever leaks (Richard's hot-remove regression) the t2
-  and t5 phase-2 unbind/rebind cycles will surface `-EBUSY` on rebind.
-- **Patch 2** (`cxl/pci: Add BI topology enable/disable`) — happy paths
-  in t1/t2/t5/t6/t9/t10; the rollback path is exercised implicitly by
-  the fail-closed gates in t7/t8. The err_rollback fix (skip the failed
-  dport) is what keeps t7/t8 boot times reasonable (no double 5s commit
-  timeout).
-- **Patch 3** (`cxl/hdm: Add BI coherency support for endpoint decoders`) —
-  drives `target_type` from `cxlhdm->supported_coherency`; t4 exercises
-  the "device not BI-capable" attach reject.
-- **Patch 4** (`cxl: Add HDM-DB region creation`) — root `cap_bi` and
-  endpoint `bi` sysfs are exercised in every suite. t3 verifies HDM-H
-  region creation on a non-BI CFMWS; t4 verifies the "BI not enabled on
-  device" attach reject.
-- **Patch 5** (`cxl/hdm: Rename decoder coherency flags`) — rename only;
-  covered by anything that reads `cap_bi` (which cohabits with the
-  renamed `cap_ram`/`cap_pmem` in the same attribute group).
+- **BI register probing and dport mapping** — every suite that reaches
+  region commit exercises this; if the dport BI Decoder mapping ever
+  leaks across a hot-remove, the t2 and t5 phase-2 unbind/rebind cycles
+  surface `-EBUSY` on rebind.
+- **`cxl_bi_setup` topology walk** — happy paths in t1/t2/t5/t6/t9/t10;
+  the rollback path is exercised implicitly by the fail-closed gates in
+  t7/t8. The rollback must skip the failed dport (avoiding a redundant
+  commit poll on it), or t7/t8 boot times balloon by up to 5s per
+  aborted enable.
+- **HDM decoder coherency init** — `cxl_hdm->supported_coherency` drives
+  the endpoint decoder's default `target_type`. t4 exercises the
+  "device not BI-capable" attach reject; auto-committed decoders that
+  already carry the HDM BI bit are rejected with `-ENXIO`.
+- **HDM-DB region ABI** — root `cap_bi` and endpoint `bi` are exercised
+  in every suite. t3 verifies HDM-H region creation on a non-BI CFMWS;
+  t4 verifies the "BI not enabled on device" attach reject; t14
+  verifies coexistence of BI and HDM-H root decoders.
+- **CFMWS coherency flag naming** — `cap_ram` / `cap_pmem` cohabit
+  with `cap_bi` in the same attribute group; anything reading `cap_bi`
+  transitively covers this.
 
 ## Diagnostics
 
 Failures map to specific root causes:
 
-- Missing `cap_bi` on root decoders → patch 4 not applied (or
-  `is_visible` misconfigured).
+- Missing `cap_bi` on root decoders → kernel lacks the HDM-DB region
+  ABI, or the attribute group's `is_visible` is misconfigured.
 - Missing `bi` on endpoint decoders → same as above, endpoint side.
 - `BI setup failed` in dmesg on t1/t2/t5/t6/t9 → topology walk failed
-  where it should have succeeded (register probing regression, USP
-  probe, or `nr_bi` accounting).
-- `BI setup failed` **absent** in dmesg on t7/t8 → cxl_bi_setup didn't
-  bail on the missing 256B Flit hop as it should.
+  where it should have succeeded (register probing, USP probe, or
+  `nr_bi` accounting regression).
+- `BI setup failed` **absent** in dmesg on t7/t8 → `cxl_bi_setup`
+  didn't bail on the missing 256B Flit hop as it should.
 - `-EBUSY` on the second bind in t2/t5 phase 2 → dport BI Decoder
-  region leaked on unbind (patch 1 regression).
-- 5s+ pause on t7/t8 rollback → err_rollback disables the failed dport
-  (patch 2 rollback regression).
+  mapping leaked on unbind (devres group boundary regression).
+- 5s+ pause on t7/t8 rollback → err_rollback drove disable on the
+  failed dport instead of skipping it.
 
 ## Known limitations
 
 - No BI data-path validation: BISnp/BIRsp wire behaviour is out of
   scope. QEMU does not currently emulate the response side.
-- No BI-ID commit timeout injection (v5 cover-letter scenario 5): the
-  suite has no way to make QEMU refuse a `__cxl_bi_commit_decoder()`
-  poll. If QEMU grows a knob for this, a `t15-commit-timeout.sh`
-  becomes straightforward.
+- No BI-ID commit timeout injection: the suite has no way to make QEMU
+  refuse a `__cxl_bi_commit_decoder()` poll. If QEMU grows a knob for
+  this, a dedicated commit-timeout suite becomes straightforward.
 - t7 and t8 model non-flit hops (on the RP and DSP respectively) but
   currently emit TAP `# SKIP` because upstream QEMU's `x-256b-flit=off`
   device option is not reflected in the `LnkCtl2.FlitModeEnable` bit

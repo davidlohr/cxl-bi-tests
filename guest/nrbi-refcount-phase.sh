@@ -1,11 +1,11 @@
 #!/bin/bash
 # t5 phase 2: shared-RP nr_bi refcount, verified without two regions.
 #
-# Invariant (patch 2, __cxl_bi_ctrl_dport ROOT_PORT branch): the root
-# port's BI Decoder Control register carries an nr_bi refcount so that
-# BI stays enabled while any of its child endpoints have BI up. With
-# two endpoints sharing an RP (t5's topology), unbinding one endpoint
-# must NOT flip the RP's BI off; only the second unbind clears it.
+# The root port's BI Decoder Control state is refcounted via
+# dport->nr_bi so BI stays enabled while any of its child endpoints
+# has BI up. With two endpoints sharing an RP (t5's topology),
+# unbinding one endpoint must NOT flip the RP's BI off; only the
+# second unbind clears it.
 #
 # The verification does NOT try to build two independent regions - the
 # single switch USP above the endpoints doesn't have enough decoders
@@ -18,8 +18,8 @@
 #     and its bi would flip 0 (or dmesg would carry "BI dport disable
 #     failed" from the dealloc walk hitting mem1's still-needed path).
 #  3. Verify mem1 stays bi=1 and no BI errors landed in dmesg.
-#  4. Rebind mem0 - patch 1's dport-mapping-in-devres-group fix means
-#     rebind must not hit -EBUSY on the BI Decoder region request.
+#  4. Rebind mem0 - a leaked dport BI Decoder mapping from the
+#     previous bind would cause -EBUSY here on the region request.
 #  5. Verify mem0 rebinds cleanly and no "BI setup failed" appeared.
 
 set -o pipefail
@@ -107,8 +107,8 @@ else
 	ok "no BI errors on partial unbind"
 fi
 
-# --- rebind mem_unbind. patch 1's leak fix means the BI Decoder
-# region must be re-requestable; a leak would give -EBUSY here.
+# --- rebind mem_unbind. A leaked dport BI Decoder region from the
+# previous bind would surface here as -EBUSY on the request.
 dmesg -C
 echo "$bdf_unbind" > /sys/bus/pci/drivers/cxl_pci/bind 2>/dev/null || \
 	echo "$mem_unbind" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
@@ -129,7 +129,7 @@ else
 	ok "no 'BI setup failed' on rebind"
 fi
 if dmesg | grep -qE "Failed to request region.*[Bb][iI]"; then
-	fail "no 'Failed to request region' on BI mapping (patch 1 leak)"
+	fail "no 'Failed to request region' on BI mapping (dport leak)"
 	dmesg | grep "Failed to request region" | sed 's/^/# /'
 else
 	ok "no 'Failed to request region' on BI mapping"

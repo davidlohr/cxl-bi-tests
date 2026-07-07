@@ -2,8 +2,9 @@
 # t3-hdmh-cfmws.sh - BI-capable device under a plain (HDM-H) CFMWS.
 #
 # Same topology as t2 (BI-capable device under a switch), but the
-# machine's CFMWS carries no back-invalidate restriction. This is the
-# v5 cover letter's "Type3 device supports BI but CFMW does not" case.
+# machine's CFMWS carries no back-invalidate restriction. Models a
+# BI-capable Type 3 device attached to a host that doesn't expose an
+# HDM-DB window: the device stays functional as HDM-H.
 # Expectations:
 #   - cxl_bi_setup succeeds on the topology and cxlds->bi=1 (the
 #     device path is BI-capable end-to-end).

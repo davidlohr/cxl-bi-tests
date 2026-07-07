@@ -15,9 +15,8 @@
 #     check must pass and every dport's BI enable must commit.
 #   - Cascaded USPs each map a BI RT (or tolerate the absence, per
 #     8.2.4.26). Neither should be missed on rollback if enable fails.
-#   - No CXL 4.0 spec text explicitly covers cascaded switches for BI
-#     (see the review discussion around v5 patch 2's DSP nr_bi debate).
-#     Kernel behaviour today is "walk everything, enable every dport
+#   - No CXL 4.0 spec text explicitly covers cascaded switches for BI.
+#     Current kernel behaviour is "walk everything, enable every dport
 #     in the chain"; this suite makes any regression on that visible.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"

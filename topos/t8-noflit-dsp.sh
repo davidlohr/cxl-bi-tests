@@ -1,12 +1,12 @@
 #!/bin/bash
-# t8-noflit-dsp.sh - the "68b DSP" mixed-config case from the v5 cover.
+# t8-noflit-dsp.sh - "68b DSP" mixed config: BI-capable endpoint under
+# a DSP that is not in 256B Flit mode.
 #
-# BI-capable endpoint under a switch, but the DSP directly above the
-# endpoint is *not* in 256B Flit mode. This models the CXL 4.0 9.14.3
-# mixed configuration: BI-capable device on a Downstream Port that does
-# not support 256B Flit mode. Per 9.14.3.3 System Software shall keep
-# the BI bit unset on all decoders in the device / switch / host that
-# span the device's HDM.
+# This models the CXL 4.0 §9.14.3 mixed configuration: a BI-capable
+# device sitting on a Downstream Port whose link is not in 256B Flit
+# mode. Per §9.14.3.3 System Software shall keep the BI bit unset on
+# all decoders in the device / switch / host that span the device's
+# HDM.
 #
 # Expectations:
 #   - cxl_bi_setup's check loop finds cxl_is_bi_capable() false on the
@@ -14,9 +14,6 @@
 #     enabled and cxlds->bi stays 0.
 #   - Root decoder cap_bi=1 (CFMWS carries the flag).
 #   - Region attach to a DEVMEM region rejects with -ENXIO.
-#   - v5 cover letter noted "BI setup failed rc=-22" for this shape;
-#     the current tree returns 0 silently instead. The test accepts
-#     either outcome as long as BI is not enabled on the topology.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 
