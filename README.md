@@ -35,20 +35,20 @@ varying one axis so the fail-closed gate under test is isolated.
 
 | Suite | Topology | What it exercises |
 |-------|----------|-------------------|
-| **t1** | Endpoint directly under an RP, no switch, BI CFMWS | Minimal happy path: single-dport walk. |
-| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | Full switched happy path. Phase 2 drives unbind/rebind lifecycle. Also exercises `decoders_committed`, `create_ram_region` visibility, and no-`mismatch decoder type` WARN. |
-| **t3** | Same as t2 but the CFMWS carries no BI restriction | HDM-H region; `cap_bi=0`; endpoint `bi=0`. |
-| **t4** | Endpoint without `hdm-db`, BI CFMWS | Region attach rejects with "BI not enabled on device". |
-| **t5** | Two BI endpoints sharing one switch, BI CFMWS | 2-way HDM-DB region; both endpoints `bi=1`. Phase 2 drives the shared-RP `nr_bi` refcount case. |
-| **t6** | Switch USP with `hdm-db` present (RT optional per 8.2.4.26) | Load-bearing marker for the `@bi==NULL` USP branch in `cxl_is_bi_capable()`. |
-| **t7** | Endpoint uplink not in 256B Flit, BI CFMWS | `cxl_bi_setup` bails on the endpoint check; attach rejects. |
-| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | The v5 cover-letter mixed-config case. |
-| **t9** | Two cascaded switches, BI CFMWS | Two-level `cxl_bi_setup` walk. |
-| **t10** | Two endpoints under **different** RPs, BI CFMWS | Independent BI walks per RP; optional 2-way cross-RP region. |
-| **t11** | Endpoint with `persistent-memdev`, BI CFMWS | `create_pmem_region` on the BI root; endpoint `mode=pmem`; region `target_type=accelerator`. |
-| **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | Independent BI walks; 2-way attach rejects the non-BI target. |
-| **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | Negative launch: QEMU must refuse per CXL 4.0 9.14.3. No guest boot. |
-| **t14** | Two CFMWS (BI + HDM-H) with two endpoints under separate pxb | Multiple root decoders coexist with distinct `cap_bi`; cross-assignment rejects. |
+| **t1** | Endpoint directly under an RP, no switch, BI CFMWS | Minimal happy path: single-dport walk. Verifies `cap_bi`/`bi` enumeration, read-only ABI, HDM-DB region create/commit, endpoint decoder `target_type=accelerator`, endpoint `bi` 0→1 across commit and back to 0 on destroy. |
+| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | Full switched happy path. Also asserts `create_ram_region` and `create_pmem_region` visibility on the BI root, `decoders_committed` bumps across commit/destroy, no `mismatch decoder type` WARN, and a create → destroy → re-create → commit cycle. Phase 2 drives the unbind/rebind lifecycle. |
+| **t3** | Same as t2 but the CFMWS carries no BI restriction | No BI root decoder present; HDM-H region created + committed; endpoint decoder `target_type=expander`; endpoint `bi=0`. |
+| **t4** | Endpoint without `hdm-db`, BI CFMWS | Region attach rejects with "BI not enabled on device"; region cannot reach the committed state. |
+| **t5** | Two BI endpoints sharing one switch, BI CFMWS | Main body: 2-way HDM-DB region; both endpoints `bi=1`. Phase 2: commit a 1-way region on one endpoint, unbind the other (region-less) endpoint, verify the committed endpoint stays `bi=1` (shared-RP `nr_bi` invariant), rebind the unbound endpoint with no `BI setup failed` or `Failed to request region` (patch 1 leak cover). |
+| **t6** | Switch USP with `hdm-db` present (RT optional per 8.2.4.26) | Same shape as t2; load-bearing marker for the `@bi==NULL` USP branch in `cxl_is_bi_capable()`. Becomes distinct once QEMU can suppress BI RT on a switch USP. |
+| **t7** | RP not in 256B Flit mode, BI CFMWS | *Intended:* `cxl_bi_setup` bails at the RP hop; attach rejects. *Actual:* QEMU's `x-256b-flit=off` on ports doesn't propagate to the register `cxl_pci_flit_256()` reads, so the driver detects this via `bi_setup_succeeded` and emits TAP `# SKIP` for the fail-closed assertions. Ships the topology so a future QEMU fix flips it green automatically. |
+| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | The v5 cover-letter mixed-config case. Same QEMU limitation as t7 - emits TAP `# SKIP` today. |
+| **t9** | Two cascaded switches, BI CFMWS | Two-level `cxl_bi_setup` walk (inner + outer switch). Confirms two `cxl_port` entries and the HDM-DB region commits across the cascade. |
+| **t10** | Two endpoints under **different** RPs, BI CFMWS | Independent BI walks per RP. Attempts a 2-way cross-RP region if the root's `interleave_ways >= 2`, otherwise falls back to a 1-way region on RP0 to prove BI setup succeeded on that path. |
+| **t11** | Endpoint with `persistent-memdev` + LSA, BI CFMWS | PMEM HDM-DB region: `cap_pmem=1` on the BI root, `create_pmem_region` present, uuid-before-size ordering, endpoint `mode=pmem` and `dpa_size` on the pmem partition, endpoint decoder `target_type=accelerator` after commit, endpoint `bi=1`. |
+| **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | Identifies BI vs non-BI endpoint by probing 1-way HDM-DB commits, then attempts a 2-way region across both: attach rejects the non-BI target with "BI not enabled on device". |
+| **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | Negative launch: QEMU must refuse per CXL 4.0 9.14.3. Runs `qemu-system-x86_64` directly, greps stderr for the refusal wording, no guest boot. |
+| **t14** | Two CFMWS (BI + HDM-H) with two endpoints under separate pxb | Both BI and HDM-H root decoders coexist with distinct `cap_bi` values. Each endpoint binds to its "own" root; cross-assignment (HDM-H endpoint into the BI root) rejects. |
 
 ## Layout
 
@@ -173,8 +173,16 @@ Failures map to specific root causes:
   scope. QEMU does not currently emulate the response side.
 - No BI-ID commit timeout injection (v5 cover-letter scenario 5): the
   suite has no way to make QEMU refuse a `__cxl_bi_commit_decoder()`
-  poll. If QEMU grows a knob for this, a `t11-commit-timeout.sh`
+  poll. If QEMU grows a knob for this, a `t15-commit-timeout.sh`
   becomes straightforward.
+- t7 and t8 model non-flit hops (on the RP and DSP respectively) but
+  currently emit TAP `# SKIP` because upstream QEMU's `x-256b-flit=off`
+  device option is not reflected in the `LnkCtl2.FlitModeEnable` bit
+  that the kernel's `cxl_pci_flit_256()` reads. The driver detects
+  that `cxl_bi_setup` still succeeded (via a `bi_setup_succeeded`
+  probe against dmesg) and skips the fail-closed assertions. When
+  QEMU wires the flit register through, both suites flip to strict
+  fail-closed checks with no code changes.
 - t6 (USP without BI RT) is currently indistinguishable from t2 in
   upstream QEMU. It is included as a documentation marker; add a
   future `x-bi-rt=off` knob on `cxl-upstream` to make it distinct.
