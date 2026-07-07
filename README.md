@@ -35,20 +35,20 @@ varying one axis so the fail-closed gate under test is isolated.
 
 | Suite | Topology | What it exercises |
 |-------|----------|-------------------|
-| **t1** | Endpoint directly under an RP, no switch, BI CFMWS | Minimal happy path: single-dport walk. Verifies `cap_bi`/`bi` enumeration, read-only ABI, HDM-DB region create/commit, endpoint decoder `target_type=accelerator`, endpoint `bi` 0→1 across commit and back to 0 on destroy. |
-| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | Full switched happy path. Also asserts `create_ram_region` and `create_pmem_region` visibility on the BI root, `decoders_committed` bumps across commit/destroy, no `mismatch decoder type` WARN, and a create → destroy → re-create → commit cycle. Phase 2 drives the unbind/rebind lifecycle. |
-| **t3** | Same as t2 but the CFMWS carries no BI restriction | No BI root decoder present; HDM-H region created + committed; endpoint decoder `target_type=expander`; endpoint `bi=0`. |
-| **t4** | Endpoint without `hdm-db`, BI CFMWS | Region attach rejects with "BI not enabled on device"; region cannot reach the committed state. |
-| **t5** | Two BI endpoints sharing one switch, BI CFMWS | Main body: 2-way HDM-DB region; both endpoints `bi=1`. Phase 2: commit a 1-way region on one endpoint, unbind the other (region-less) endpoint, verify the committed endpoint stays `bi=1` (shared-RP `nr_bi` invariant), rebind the unbound endpoint with no `BI setup failed` or `Failed to request region` (patch 1 leak cover). |
-| **t6** | Switch USP with `hdm-db` present (RT optional per 8.2.4.26) | Same shape as t2; load-bearing marker for the `@bi==NULL` USP branch in `cxl_is_bi_capable()`. Becomes distinct once QEMU can suppress BI RT on a switch USP. |
-| **t7** | RP not in 256B Flit mode, BI CFMWS | *Intended:* `cxl_bi_setup` bails at the RP hop; attach rejects. *Actual:* QEMU's `x-256b-flit=off` on ports doesn't propagate to the register `cxl_pci_flit_256()` reads, so the driver detects this via `bi_setup_succeeded` and emits TAP `# SKIP` for the fail-closed assertions. Ships the topology so a future QEMU fix flips it green automatically. |
-| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | The v5 cover-letter mixed-config case. Same QEMU limitation as t7 - emits TAP `# SKIP` today. |
-| **t9** | Two cascaded switches, BI CFMWS | Two-level `cxl_bi_setup` walk (inner + outer switch). Confirms two `cxl_port` entries and the HDM-DB region commits across the cascade. |
-| **t10** | Two endpoints under **different** RPs, BI CFMWS | Independent BI walks per RP. Attempts a 2-way cross-RP region if the root's `interleave_ways >= 2`, otherwise falls back to a 1-way region on RP0 to prove BI setup succeeded on that path. |
-| **t11** | Endpoint with `persistent-memdev` + LSA, BI CFMWS | PMEM HDM-DB region: `cap_pmem=1` on the BI root, `create_pmem_region` present, uuid-before-size ordering, endpoint `mode=pmem` and `dpa_size` on the pmem partition, endpoint decoder `target_type=accelerator` after commit, endpoint `bi=1`. |
-| **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | Identifies BI vs non-BI endpoint by probing 1-way HDM-DB commits, then attempts a 2-way region across both: attach rejects the non-BI target with "BI not enabled on device". |
-| **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | Negative launch: QEMU must refuse per CXL 4.0 9.14.3. Runs `qemu-system-x86_64` directly, greps stderr for the refusal wording, no guest boot. |
-| **t14** | Two CFMWS (BI + HDM-H) with two endpoints under separate pxb | Both BI and HDM-H root decoders coexist with distinct `cap_bi` values. Each endpoint binds to its "own" root; cross-assignment (HDM-H endpoint into the BI root) rejects. |
+| **t1** | Endpoint directly under an RP, no switch, BI CFMWS | BI enables end-to-end through a single dport; an HDM-DB region commits and the endpoint reports `bi=1`. |
+| **t2** | Endpoint under DSP + USP + RP, BI CFMWS | BI enables through the full DSP + USP + RP walk; an HDM-DB region commits. Phase 2 verifies `cxl_bi_dealloc` on unbind and a fresh `cxl_bi_setup` on rebind. |
+| **t3** | BI-capable endpoint, non-BI CFMWS | No BI root decoder is created; an HDM-H region commits without any BI activation on the topology. |
+| **t4** | Non-BI endpoint (`hdm-db` off), BI CFMWS | Region attach rejects with "BI not enabled on device". |
+| **t5** | Two BI endpoints sharing one switch and one RP, BI CFMWS | A 2-way HDM-DB region commits with both endpoints in BI. Phase 2 verifies the shared RP keeps BI enabled while any child still needs it (`nr_bi` refcount) and that rebinding one endpoint does not leak the dport BI Decoder mapping. |
+| **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
+| **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
+| **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop. The v5 cover-letter mixed-config case. Emits TAP `# SKIP` today — see Known limitations. |
+| **t9** | Cascaded switches (two switch pairs), BI CFMWS | BI enables through both switch layers; an HDM-DB region commits across the cascade. |
+| **t10** | Two endpoints under **different** RPs, BI CFMWS | Each RP gets its own independent BI setup; an HDM-DB region commits (2-way cross-RP when the root allows it, otherwise a per-RP 1-way). |
+| **t11** | Endpoint with persistent memdev, BI CFMWS | An HDM-DB PMEM region commits and the endpoint reports `bi=1`. |
+| **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | A 2-way region attach across both rejects the non-BI target. |
+| **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | QEMU must refuse the launch (CXL 4.0 §9.14.3). No guest boot. |
+| **t14** | Two CFMWS (BI + HDM-H) with two endpoints, BI CFMWS on one | BI and HDM-H root decoders coexist; endpoints bind to the correct one and cross-assignment rejects. |
 
 ## Layout
 
