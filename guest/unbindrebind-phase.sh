@@ -54,6 +54,8 @@ create_region() {
 	echo 256 > "$R/interleave_granularity"
 	echo 1   > "$R/interleave_ways"
 	echo $sz > "$R/size"
+	# Release any leftover DPA before re-reserving.
+	echo 0 > "$CXL/$dec/dpa_size" 2>/dev/null
 	echo ram > "$CXL/$dec/mode" 2>/dev/null
 	echo "$sz" > "$CXL/$dec/dpa_size"
 	echo "$dec" > "$R/target0"

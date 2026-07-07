@@ -27,7 +27,10 @@ run_suite() { # run_suite <topo-script> <suite>
 	fi
 	guest_scp "$BI_TESTS_DIR/guest/run-tests.sh" root@localhost:/tmp/ \
 		>/dev/null
-	guest_ssh "dmesg -C; bash /tmp/run-tests.sh $suite" \
+	# Do NOT dmesg -C here: the driver's bi_setup_succeeded / boot-state
+	# checks want the cxl_bi_setup traces from the initial cxl_mem probe.
+	# Phase-2 scripts clear dmesg themselves when they need a fresh view.
+	guest_ssh "bash /tmp/run-tests.sh $suite" \
 		| tee "$OUT/$suite.tap"
 	local rc=${PIPESTATUS[0]}
 	guest_ssh "dmesg" > "$OUT/$suite.dmesg" 2>/dev/null

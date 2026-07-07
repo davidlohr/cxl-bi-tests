@@ -1,16 +1,26 @@
 #!/bin/bash
-# t5 phase 2: shared-RP nr_bi refcount.
+# t5 phase 2: shared-RP nr_bi refcount, verified without two regions.
 #
 # Invariant (patch 2, __cxl_bi_ctrl_dport ROOT_PORT branch): the root
-# port's BI Decoder Control register carries a refcount so that BI
-# stays enabled while any of its child endpoints have committed BI.
-# With two endpoints sharing an RP (t5's topology), unbinding one
-# endpoint must NOT flip the RP's BI off; unbinding the second must.
+# port's BI Decoder Control register carries an nr_bi refcount so that
+# BI stays enabled while any of its child endpoints have BI up. With
+# two endpoints sharing an RP (t5's topology), unbinding one endpoint
+# must NOT flip the RP's BI off; only the second unbind clears it.
 #
-# Direct visibility of dport->nr_bi from userspace is not exposed.
-# What we CAN observe: rebinding after a partial unbind must not
-# report "BI setup failed" (would mean the RP got into a bad state)
-# and endpoint bi must go back to 1 once its region is rebuilt.
+# The verification does NOT try to build two independent regions - the
+# single switch USP above the endpoints doesn't have enough decoders
+# for two disjoint routings, and that limit is orthogonal to what we
+# want to observe. Instead:
+#
+#  1. Commit a 1-way HDM-DB region on mem1 only. mem1 endpoint bi=1.
+#  2. Unbind mem0 (bound but region-less). If the RP dropped BI
+#     naively here, mem1's committed decoder would stop routing BI
+#     and its bi would flip 0 (or dmesg would carry "BI dport disable
+#     failed" from the dealloc walk hitting mem1's still-needed path).
+#  3. Verify mem1 stays bi=1 and no BI errors landed in dmesg.
+#  4. Rebind mem0 - patch 1's dport-mapping-in-devres-group fix means
+#     rebind must not hit -EBUSY on the BI Decoder region request.
+#  5. Verify mem0 rebinds cleanly and no "BI setup failed" appeared.
 
 set -o pipefail
 CXL=/sys/bus/cxl/devices
@@ -49,84 +59,91 @@ rd=$(root_decoder_bi)
 mems=( $(for m in $CXL/mem*; do basename "$m"; done | sort) )
 [ "${#mems[@]}" = 2 ] || \
 	{ echo "Bail out! need 2 memdevs, got ${#mems[@]}"; exit 1; }
-dec0=$(ep_decoder_for_mem "${mems[0]}")
-dec1=$(ep_decoder_for_mem "${mems[1]}")
-bdf0=$(bdf_for_mem "${mems[0]}")
-bdf1=$(bdf_for_mem "${mems[1]}")
+# mems[0] will be unbound/rebound; mems[1] carries the region.
+mem_unbind=${mems[0]}; mem_keep=${mems[1]}
+bdf_unbind=$(bdf_for_mem "$mem_unbind")
+dec_keep=$(ep_decoder_for_mem "$mem_keep")
 
-# Build two independent 1-way HDM-DB regions (one per endpoint) so
-# unbinding one does not tear the other down.
-make_region() {
-	local dec=$1 sz=$((256 << 20))
-	local region; region=$(cat "$CXL/$rd/create_ram_region")
-	echo "$region" > "$CXL/$rd/create_ram_region" 2>/dev/null || return 1
-	local R=$CXL/$region
-	echo 256 > "$R/interleave_granularity"
-	echo 1 > "$R/interleave_ways"
-	echo "$sz" > "$R/size"
-	echo ram > "$CXL/$dec/mode" 2>/dev/null
-	echo "$sz" > "$CXL/$dec/dpa_size"
-	echo "$dec" > "$R/target0"
-	echo 1 > "$R/commit" || return 1
-	echo "$region"
-}
+# Build a 1-way HDM-DB region on mem_keep only. Release any prior DPA
+# (t5 main body left dpa_size populated on both endpoints).
+for m in "${mems[@]}"; do
+	d=$(ep_decoder_for_mem "$m")
+	echo 0 > "$CXL/$d/dpa_size" 2>/dev/null
+done
+sz=$((256 << 20))
+region=$(cat "$CXL/$rd/create_ram_region")
+echo "$region" > "$CXL/$rd/create_ram_region" || \
+	{ echo "Bail out! create_ram_region"; exit 1; }
+R=$CXL/$region
+echo 256 > "$R/interleave_granularity"
+echo 1 > "$R/interleave_ways"
+echo "$sz" > "$R/size"
+echo ram > "$CXL/$dec_keep/mode" 2>/dev/null
+echo "$sz" > "$CXL/$dec_keep/dpa_size"
+echo "$dec_keep" > "$R/target0"
+echo 1 > "$R/commit" || { echo "Bail out! commit"; exit 1; }
+expect_eq "mem_keep bi=1 pre-unbind" "$(cat "$CXL/$dec_keep/bi")" 1
 
-r0=$(make_region "$dec0")
-r1=$(make_region "$dec1")
-[ -n "$r0" ] && [ -n "$r1" ] || \
-	{ echo "Bail out! initial region setup failed"; exit 1; }
-expect_eq "both endpoints bi=1 before partial unbind" \
-	"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
-
-# Tear down mem0's region and unbind it. mem1's region stays committed
-# and must remain BI-enabled - so the shared RP must NOT drop BI.
-echo 0 > "$CXL/$r0/commit" 2>/dev/null
-echo "$r0" > "$CXL/$rd/delete_region" 2>/dev/null
-echo "$bdf0" > /sys/bus/pci/drivers/cxl_pci/unbind 2>/dev/null || \
-	echo "${mems[0]}" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
-for i in $(seq 1 30); do
-	[ -e "$CXL/$dec0" ] || break
+# --- unbind mem_unbind (no region on it, BI still enabled on device)
+dmesg -C
+echo "$bdf_unbind" > /sys/bus/pci/drivers/cxl_pci/unbind 2>/dev/null || \
+	echo "$mem_unbind" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
+# Wait for the endpoint decoder tree to disappear.
+for i in $(seq 1 60); do
+	[ -e "$CXL/$mem_unbind" ] || break
 	sleep 0.2
 done
 
-expect_eq "mem1 still bi=1 after mem0 unbind" \
-	"$(cat "$CXL/$dec1/bi")" 1
-if dmesg | grep -qE "BI setup failed|BI dport disable failed"; then
-	fail "no BI setup/disable errors on partial unbind"
+# mem_keep must be unaffected: its endpoint bi stays 1, its region
+# stays committed, and no BI dport-disable failure landed in dmesg.
+expect_eq "mem_keep bi=1 after partial unbind" \
+	"$(cat "$CXL/$dec_keep/bi")" 1
+expect_eq "mem_keep region still committed" \
+	"$(cat "$R/commit")" 1
+if dmesg | grep -qE "BI dport disable failed|BI setup failed"; then
+	fail "no BI errors on partial unbind"
+	dmesg | grep -E "BI dport|BI setup" | sed 's/^/# /'
 else
-	ok "no BI setup/disable errors on partial unbind"
+	ok "no BI errors on partial unbind"
 fi
 
-# Rebind mem0 and verify it rearms.
-echo "$bdf0" > /sys/bus/pci/drivers/cxl_pci/bind 2>/dev/null || \
-	echo "${mems[0]}" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+# --- rebind mem_unbind. patch 1's leak fix means the BI Decoder
+# region must be re-requestable; a leak would give -EBUSY here.
+dmesg -C
+echo "$bdf_unbind" > /sys/bus/pci/drivers/cxl_pci/bind 2>/dev/null || \
+	echo "$mem_unbind" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
 for i in $(seq 1 60); do
-	dec0r=$(ep_decoder_for_mem "${mems[0]}")
-	[ -n "$dec0r" ] && break
+	[ -e "$CXL/$mem_unbind" ] && break
 	sleep 0.5
 done
-if [ -z "$dec0r" ]; then
-	fail "mem0 endpoint decoder returned after rebind"
+if [ ! -e "$CXL/$mem_unbind" ]; then
+	fail "mem_unbind memdev returned after rebind"
 	echo "1..$N"; exit $((FAIL != 0))
 fi
-ok "mem0 endpoint decoder returned after rebind"
+ok "mem_unbind memdev returned after rebind"
 
-r0=$(make_region "$dec0r")
-if [ -n "$r0" ]; then
-	ok "mem0 region recommitted after partial cycle"
-	expect_eq "mem0 endpoint bi=1 after rebind" \
-		"$(cat "$CXL/$dec0r/bi")" 1
-	expect_eq "mem1 still bi=1 (unaffected)" \
-		"$(cat "$CXL/$dec1/bi")" 1
-	echo 0 > "$CXL/$r0/commit" 2>/dev/null
-	echo "$r0" > "$CXL/$rd/delete_region" 2>/dev/null
+if dmesg | grep -q "BI setup failed"; then
+	fail "no 'BI setup failed' on rebind"
+	dmesg | grep "BI setup" | sed 's/^/# /'
 else
-	fail "mem0 region recommit after rebind"
+	ok "no 'BI setup failed' on rebind"
+fi
+if dmesg | grep -qE "Failed to request region.*[Bb][iI]"; then
+	fail "no 'Failed to request region' on BI mapping (patch 1 leak)"
+	dmesg | grep "Failed to request region" | sed 's/^/# /'
+else
+	ok "no 'Failed to request region' on BI mapping"
 fi
 
-# Clean up mem1's region so the guest ends idle.
-echo 0 > "$CXL/$r1/commit" 2>/dev/null
-echo "$r1" > "$CXL/$rd/delete_region" 2>/dev/null
+# mem_keep must still be bi=1 and committed after the whole cycle.
+expect_eq "mem_keep bi=1 after rebind cycle" \
+	"$(cat "$CXL/$dec_keep/bi")" 1
+expect_eq "mem_keep region still committed" \
+	"$(cat "$R/commit")" 1
+
+# --- clean up: mem_unbind has no region; just tear down mem_keep's.
+echo 0 > "$R/commit" 2>/dev/null
+echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
 
 echo "1..$N"
 echo "# passed: $PASS  failed: $FAIL"

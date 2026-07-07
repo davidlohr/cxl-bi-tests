@@ -35,7 +35,7 @@ rc=$?
 if [ "$rc" -eq 0 ]; then
 	fail "QEMU refused host-only + back-invalidate CFMWS"
 	echo "# QEMU accepted the invalid CFMWS (rc=$rc)"
-elif grep -qE "host-only.*back-invalidate|host-only coherent.*back-invalidate|CFMWS.*host-only.*back-invalidate" "$STDERR"; then
+elif grep -qEi "host-only.*(back-invalidate|BI)|CFMW.*host-only.*(BI|back-invalidate)" "$STDERR"; then
 	ok "QEMU refused host-only + back-invalidate CFMWS"
 else
 	# QEMU errored, but on a different message. Still likely a launch

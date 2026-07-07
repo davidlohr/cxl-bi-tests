@@ -3,10 +3,6 @@
 #
 # Usage: source this file, then call launch_qemu with topology device args.
 #        Guest reachable via: guest_ssh <cmd>
-#
-# Modeled on the PCIe UIO test suite (davidlohr/uio-tests). BI leans on
-# the same HDM-DB plumbing (256B Flit + hdm-db + back-invalidate CFMWS)
-# but exercises different sysfs and lifecycle surfaces.
 
 # Configuration (override by exporting before sourcing; see README).
 QEMU=${QEMU:-$HOME/code/qemu-upstream/build/qemu-system-x86_64}

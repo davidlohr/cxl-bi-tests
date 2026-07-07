@@ -3,10 +3,7 @@
 Boots QEMU with a set of BI-capable and BI-incapable CXL topologies, then
 runs an in-guest driver that exercises the kernel's HDM-DB region path,
 the `cxl_bi_setup`/`cxl_bi_dealloc` lifecycle, and the fail-closed gates
-around 256B Flit mode and the CFMWS BI restriction. Structure and style
-follow the PCIe UIO test suite ([davidlohr/uio-tests][uio]).
-
-[uio]: https://github.com/davidlohr/uio-tests
+around 256B Flit mode and the CFMWS BI restriction.
 
 The kernel side is the v6 series *cxl: Support Back-Invalidate* on top of
 `torvalds/master`; the QEMU side is upstream with the `hdm-db`,
@@ -15,8 +12,8 @@ The kernel side is the v6 series *cxl: Support Back-Invalidate* on top of
 ## Scope
 
 The suite validates enumeration, region provisioning, and lifetime
-management. As with the UIO suite there is no BI data path: BISnp/BIRsp
-wire behaviour is out of scope. What we do check:
+management. There is no BI data path here: BISnp/BIRsp wire behaviour
+is out of scope (QEMU does not emulate it). What we do check:
 
 - Root decoder ABI: `cap_bi` from CFMWS BI restriction (patch 4).
 - Endpoint decoder ABI: `bi` reflects HDM-DB configuration state.
@@ -97,8 +94,8 @@ Environment variables consumed by `topo-lib.sh`:
 | `RUNDIR` | `/tmp/cxl-bi-tests` | Work directory (console log, qmp socket, results). |
 | `OUT` | `$RUNDIR/results` | Results directory (`<suite>.tap`, `<suite>.dmesg`). |
 
-Guest requirements match the UIO suite: DHCP on `enp0s2` (first NIC),
-root SSH via public-key authentication, and `dmesg` readable by root.
+Guest requirements: DHCP on `enp0s2` (first NIC), root SSH via
+public-key authentication, and `dmesg` readable by root.
 
 ## Invocation
 
