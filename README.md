@@ -31,7 +31,7 @@ is out of scope (QEMU does not emulate it). What we do check:
 
 ## Topologies
 
-Fourteen topology scripts under `topos/`, each one small, each one
+Fifteen topology scripts under `topos/`, each one small, each one
 varying one axis so the fail-closed gate under test is isolated.
 
 | Suite | Topology | What it exercises |
@@ -50,6 +50,7 @@ varying one axis so the fail-closed gate under test is isolated.
 | **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | A 2-way region attach across both rejects the non-BI target. |
 | **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | QEMU must refuse the launch (CXL 4.0 §9.14.3). No guest boot. |
 | **t14** | Two CFMWS (BI + HDM-H) with two endpoints, BI CFMWS on one | BI and HDM-H root decoders coexist; endpoints bind to the correct one and cross-assignment rejects. |
+| **t15** | One endpoint, two CFMWS (BI + HDM-H) targeting the same RP | A decoder cycled out of an HDM-DB region reverts to its default `target_type`, then commits into an HDM-H region with no type-mismatch WARN. |
 
 ## Configuration
 
@@ -114,7 +115,9 @@ Mapping from BI kernel behavior to the suites that lock it in:
 - **HDM decoder coherency init** — `cxl_hdm->supported_coherency` drives
   the endpoint decoder's default `target_type`. t4 exercises the
   "device not BI-capable" attach reject; auto-committed decoders that
-  already carry the HDM BI bit are rejected with `-ENXIO`.
+  already carry the HDM BI bit are rejected with `-ENXIO`. t15 locks in
+  the region-detach path restoring the default `target_type`, so one
+  decoder can move between HDM-DB and HDM-H regions.
 - **HDM-DB region ABI** — root `cap_bi` and endpoint `bi` are exercised
   in every suite. t3 verifies HDM-H region creation on a non-BI CFMWS;
   t4 verifies the "BI not enabled on device" attach reject; t14
@@ -137,6 +140,8 @@ Failures map to specific root causes:
   didn't bail on the missing 256B Flit hop as it should.
 - `-EBUSY` on the second bind in t2/t5 phase 2 → dport BI Decoder
   mapping leaked on unbind (devres group boundary regression).
+- `mismatch decoder type` WARN in dmesg on t15 → region detach did not
+  restore the endpoint decoder's default `target_type`.
 - 5s+ pause on t7/t8 rollback → err_rollback drove disable on the
   failed dport instead of skipping it.
 

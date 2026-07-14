@@ -116,10 +116,12 @@ create_region() {
 }
 commit_region()  { echo 1 > "$CXL/$1/commit"; }
 reset_region()   { echo 0 > "$CXL/$1/commit" 2>/dev/null; }
+# destroy_region <region> [root_decoder]
+# delete_region only acts on children of the given root decoder, so
+# suites with multiple creatable roots must name the right one.
 destroy_region() {
-	local rd
+	local rd=${2:-$(root_decoder_any)}
 	reset_region "$1"
-	rd=$(root_decoder_any)
 	echo "$1" > "$CXL/$rd/delete_region" 2>/dev/null
 }
 
@@ -754,6 +756,48 @@ t14)	# Two CFMWS windows: one BI, one HDM-H, two independent endpoints.
 			[ -n "$r" ] && destroy_region "$r"
 		fi
 	fi
+	no_setup_failure
+	no_type_mismatch_warn
+	;;
+t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
+	# the same root port. Cycle a single endpoint decoder through
+	# both region flavors: attach to an HDM-DB region inherits
+	# DEVMEM; deleting the region must restore the decoder's
+	# default target_type so a subsequent HDM-H region commits on
+	# the same decoder without the "mismatch decoder type" WARN.
+	check_cap_bi_present
+	rd_bi=$(root_decoder_bi)
+	rd_h=$(root_decoder_nobi)
+	[ -n "$rd_bi" ] || { fail "no BI root decoder"; exit 1; }
+	[ -n "$rd_h" ]  || { fail "no HDM-H root decoder"; exit 1; }
+	ok "both BI and HDM-H root decoders present"
+
+	mems=( $(all_mems) )
+	expect_eq "one memdev enumerated" "${#mems[@]}" 1
+	mem=${mems[0]}
+	dec=$(ep_decoder_for_mem "$mem")
+	[ -n "$dec" ] || { fail "no endpoint decoder for $mem"; exit 1; }
+
+	expect_eq "decoder starts at default type" \
+		"$(endpoint_decoder_target_type "$dec")" expander
+
+	region=$(create_region "$rd_bi" 1 256 "$mem")
+	[ -n "$region" ] || { fail "HDM-DB region create"; exit 1; }
+	check "HDM-DB region commit" commit_region "$region"
+	expect_eq "endpoint bi=1 in HDM-DB region" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "decoder type follows HDM-DB region" \
+		"$(endpoint_decoder_target_type "$dec")" accelerator
+	destroy_region "$region" "$rd_bi"
+
+	expect_eq "decoder type restored to default after delete" \
+		"$(endpoint_decoder_target_type "$dec")" expander
+
+	region=$(create_region "$rd_h" 1 256 "$mem")
+	[ -n "$region" ] || { fail "HDM-H region create on recycled decoder"; exit 1; }
+	check "HDM-H region commit on recycled decoder" commit_region "$region"
+	expect_eq "endpoint bi=0 in HDM-H region" "$(cat "$CXL/$dec/bi")" 0
+	destroy_region "$region" "$rd_h"
+
 	no_setup_failure
 	no_type_mismatch_warn
 	;;
