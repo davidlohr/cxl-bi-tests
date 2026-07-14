@@ -96,9 +96,9 @@ create_region() {
 	region=$(cat "$CXL/$rd/create_ram_region") || return 1
 	echo "$region" > "$CXL/$rd/create_ram_region" 2>/dev/null || return 1
 	local R=$CXL/$region
-	echo 256 > "$R/interleave_granularity" || { echo ""; return 1; }
-	echo "$ways" > "$R/interleave_ways" || { echo ""; return 1; }
-	echo $((sz * ways)) > "$R/size" || { echo ""; return 1; }
+	echo 256 > "$R/interleave_granularity" 2>/dev/null || { echo ""; return 1; }
+	echo "$ways" > "$R/interleave_ways" 2>/dev/null || { echo ""; return 1; }
+	echo $((sz * ways)) > "$R/size" 2>/dev/null || { echo ""; return 1; }
 	local i=0 mem dec
 	for mem in "$@"; do
 		dec=$(ep_decoder_for_mem "$mem")
@@ -108,8 +108,11 @@ create_region() {
 		# -EBUSY when the endpoint has a stale allocation.
 		echo 0 > "$CXL/$dec/dpa_size" 2>/dev/null
 		echo ram > "$CXL/$dec/mode" 2>/dev/null
-		echo "$sz" > "$CXL/$dec/dpa_size" || { echo ""; return 1; }
-		echo "$dec" > "$R/target$i" || { echo ""; return 1; }
+		echo "$sz" > "$CXL/$dec/dpa_size" 2>/dev/null || { echo ""; return 1; }
+		# Expected to fail with -ENXIO in the negative-attach suites
+		# (t12 mixed pair, t14 cross-assignment): the reject IS the
+		# behavior under test, keep it off stderr.
+		echo "$dec" > "$R/target$i" 2>/dev/null || { echo ""; return 1; }
 		i=$((i+1))
 	done
 	echo "$region"
