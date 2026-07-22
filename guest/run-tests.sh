@@ -363,6 +363,17 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 	destroy_region "$region"
 	no_type_mismatch_warn
 
+	# Discovery behind a switch: the boot dmesg must show the BI
+	# capability walk (endpoint, RP and DSP decoders + the USP RT)
+	# and the BI-ID commits that backed the region commits above.
+	ndec=$(dmesg | grep -c "found BI Decoder capability")
+	[ "$ndec" -ge 3 ] && ok "BI Decoder caps discovered (ep+rp+dsp)" \
+		|| fail "BI Decoder caps discovered (got $ndec, want >= 3)"
+	check "dmesg: 'found BI RT capability' (USP)" \
+		dmesg_saw "found BI RT capability"
+	check "dmesg: 'BI-ID commit wait took'" \
+		dmesg_saw "BI-ID commit wait took"
+
 	# Phase 2 (unbind/rebind) is driven from run-all.sh with the
 	# guest/unbindrebind-phase.sh helper.
 	;;
