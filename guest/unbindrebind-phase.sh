@@ -1,10 +1,13 @@
 #!/bin/bash
 # t2 phase 2: unbind/rebind lifecycle.
 #
-# cxl_bi_setup registers cxl_bi_dealloc as a devm action on
-# cxlmd->dev. On cxl_mem unbind, dealloc must clear BI on the device
-# and every dport in the path. Rebind must re-enable BI and re-arm
-# the endpoint decoder to reach bi=1 when the region is rebuilt.
+# cxl_bi_setup registers cxl_bi_dealloc as a devm action on the
+# endpoint port. A cxl_pci/cxl_mem unbind reaches it through the
+# endpoint teardown; a cxl_port unbind of the endpoint runs it up
+# front, before the detach cascades into the memdev. Either way
+# dealloc must clear BI on the device and every dport in the path,
+# and rebind must re-enable BI and re-arm the endpoint decoder to
+# reach bi=1 when the region is rebuilt. Both cycles are exercised.
 #
 # Output: TAP-ish, exit 0 iff all checks pass.
 
@@ -123,6 +126,85 @@ if dmesg | grep -q "BI setup failed"; then
 	fail "no 'BI setup failed' across unbind/rebind cycle"
 else
 	ok "no 'BI setup failed' across unbind/rebind cycle"
+fi
+
+# ---- cxl_port endpoint unbind cycle --------------------------------
+# BI-ID allocation lives with the endpoint port: unbinding the
+# cxl_port driver from the endpoint must disable BI first (port
+# devres), then cascade into the memdev detach. Rebinding the memdev
+# recreates the endpoint port and re-enables BI.
+endpoint_of_mem() {
+	local mem=$1 ep
+	for ep in $CXL/endpoint*; do
+		[ -d "$ep" ] || continue
+		if [ "$(basename "$(readlink -f "$ep/uport")")" = "$mem" ]; then
+			basename "$ep"
+			return
+		fi
+	done
+}
+
+mem=$(first_mem)
+dec=$(ep_decoder_for_mem "$mem")
+ep=$(endpoint_of_mem "$mem")
+region=$(create_region "$rd")
+if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null && \
+   [ -n "$ep" ]; then
+	ok "port-cycle: HDM-DB region up (bi=$(cat "$CXL/$dec/bi"))"
+else
+	fail "port-cycle: HDM-DB region up"
+	echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"
+	exit $((FAIL != 0))
+fi
+
+dmesg -C
+echo "$ep" > /sys/bus/cxl/drivers/cxl_port/unbind 2>/dev/null
+for i in $(seq 1 30); do
+	[ -e "$CXL/$mem/driver" ] || break
+	sleep 0.2
+done
+if dmesg | grep -q "BI requests disabled"; then
+	ok "port-cycle: BI disabled on endpoint port unbind"
+else
+	fail "port-cycle: BI disabled on endpoint port unbind"
+fi
+if [ ! -e "$CXL/$mem/driver" ]; then
+	ok "port-cycle: teardown cascaded into memdev unbind"
+else
+	fail "port-cycle: teardown cascaded into memdev unbind"
+fi
+# The port devres runs dealloc ahead of the memdev detach: 'BI
+# requests disabled' must precede 'disconnect' in the log.
+dis=$(dmesg | grep -n "BI requests disabled" | head -1 | cut -d: -f1)
+dc=$(dmesg | grep -n "disconnect" | head -1 | cut -d: -f1)
+if [ -n "$dis" ] && [ -n "$dc" ] && [ "$dis" -lt "$dc" ]; then
+	ok "port-cycle: BI disable precedes memdev disconnect"
+else
+	fail "port-cycle: BI disable precedes memdev disconnect (dis=$dis dc=$dc)"
+fi
+
+echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+for i in $(seq 1 60); do
+	dec2=$(ep_decoder_for_mem "$mem")
+	[ -n "$dec2" ] && break
+	sleep 0.5
+done
+if [ -n "$dec2" ]; then
+	ok "port-cycle: endpoint decoder returned after rebind ($dec2)"
+	region=$(create_region "$rd")
+	if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null; then
+		expect_eq "port-cycle: post-rebind endpoint bi=1" \
+			"$(cat "$CXL/$dec2/bi")" 1
+	else
+		fail "port-cycle: post-rebind commit"
+	fi
+else
+	fail "port-cycle: endpoint decoder returned after rebind"
+fi
+if dmesg | grep -q "BI setup failed"; then
+	fail "port-cycle: no 'BI setup failed'"
+else
+	ok "port-cycle: no 'BI setup failed'"
 fi
 
 echo "1..$N"
