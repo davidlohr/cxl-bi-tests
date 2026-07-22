@@ -51,6 +51,7 @@ varying one axis so the fail-closed gate under test is isolated.
 | **t13** | *Host-only*: CFMWS with `host-only=on,back-invalidate=on` | QEMU must refuse the launch (CXL 4.0 §9.18.1.3 Window Restrictions). No guest boot. |
 | **t14** | Two CFMWS (BI + HDM-H) with two endpoints, BI CFMWS on one | BI and HDM-H root decoders coexist; endpoints bind to the correct one and cross-assignment rejects. |
 | **t15** | One endpoint, two CFMWS (BI + HDM-H) targeting the same RP | A decoder cycled out of an HDM-DB region reverts to its default `target_type`, then commits into an HDM-H region with no type-mismatch WARN. |
+| **t16** | Firmware-committed decoders via QEMU `x-committed=hdm-h\|hdm-db` (host-driven, multi-boot) | Adoption of a committed HDM-DB decoder (plus re-adoption across reboot), HDM-H control, the BI-decoder-in-a-non-BI-window reject (§9.18.1.3), and a combined 3-HB boot asserting per-device independence of the adopt/reject paths. Skips wholesale when QEMU lacks `x-committed`; region-assembly checks SKIP when the kernel lacks the out-of-series passthrough assembly patch. |
 
 ## Configuration
 

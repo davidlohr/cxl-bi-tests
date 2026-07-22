@@ -1,0 +1,267 @@
+#!/bin/bash
+# t16-autodiscover.sh - firmware-committed (auto-discovered) BI decoders.
+#
+# QEMU's x-committed=hdm-h|hdm-db (cxl-type3) emulates firmware having
+# programmed and committed HDM decoder 0 against a fixed memory window
+# before OS handoff, with the device's BI Enable set for hdm-db. The
+# kernel is expected to adopt the inherited configuration: accept the
+# committed decoder at enumeration, adopt the enabled BI state, and
+# refuse a BI decoder under a window without the BI restriction (CXL
+# 4.0 9.18.1.3 Window Restrictions).
+#
+# Host-driven multi-boot suite (like t13): each scenario needs its own
+# QEMU command line, so this script launches the guests itself and
+# emits TAP directly. Skips wholesale when QEMU lacks x-committed.
+# A final combined machine (three host bridges, one scenario each)
+# asserts per-device independence: window auto-selection with several
+# windows present, and adoption on one device coexisting with the
+# window reject on another in a single boot.
+#
+# Region auto-assembly through the passthrough host bridge additionally
+# needs the out-of-series passthrough-decoder assembly patch; when the
+# kernel lacks it ("region sort failed"), the assembly checks are
+# emitted as documented SKIPs while adoption itself is still asserted.
+
+set -o pipefail
+BI_TESTS_DIR=$(dirname "$(readlink -f "$0")")/..
+source "$BI_TESTS_DIR/topo-lib.sh"
+OUT=${OUT:-$RUNDIR/results}
+mkdir -p "$OUT"
+
+PASS=0; FAIL=0; N=0
+ok()   { N=$((N+1)); PASS=$((PASS+1)); echo "ok $N - $1"; }
+fail() { N=$((N+1)); FAIL=$((FAIL+1)); echo "not ok $N - $1"; }
+skip() { N=$((N+1)); PASS=$((PASS+1)); echo "ok $N - # SKIP $1"; }
+# Always emit the TAP plan and summary, even on bail-out exits, and
+# never leave a guest behind. An EXIT trap does not alter the exit
+# status.
+finish() {
+	stop_qemu >/dev/null 2>&1
+	echo "1..$N"
+	echo "# passed: $PASS  failed: $FAIL"
+}
+trap finish EXIT
+
+echo "# CXL BI auto-discovery (x-committed) suite t16"
+
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-committed"; then
+	skip "qemu cxl-type3 lacks x-committed"
+	exit 0
+fi
+
+# Fixed direct-attach topology: one RP under one host bridge (the
+# passthrough shape x-committed supports), one endpoint decoder2.0.
+DEC=decoder2.0
+launch_t16() { # launch_t16 <device-extra> <fmw-extra>
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,share=on,size=256M \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2 \
+	  -device cxl-type3,bus=rp0,volatile-memdev=m0,id=vmem0,sn=0x1$1 \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k$2
+}
+g() { guest_ssh "$@" 2>/dev/null; }
+# grep -q exits on first match and SIGPIPEs the ssh pipe, which
+# pipefail then reports as failure exactly when the line is present;
+# count matches instead so the pipe always drains.
+dmesg_has() { [ "$(g dmesg | grep -c "$1")" -gt 0 ]; }
+
+# Assembly checks are SKIPs when the kernel cannot assemble committed
+# regions through the passthrough decoder (out-of-series patch).
+assembly_gap() { dmesg_has "region sort failed"; }
+check_assembled() { # check_assembled <tag>
+	if assembly_gap; then
+		skip "$1: region commit (kernel lacks passthrough assembly)"
+		skip "$1: endpoint bi (kernel lacks passthrough assembly)"
+		return
+	fi
+	if [ "$(g cat /sys/bus/cxl/devices/region0/commit)" = 1 ]; then
+		ok "$1: auto-assembled region committed"
+	else
+		fail "$1: auto-assembled region committed"
+	fi
+	if [ "$(g cat /sys/bus/cxl/devices/$DEC/bi)" = 1 ]; then
+		ok "$1: endpoint bi=1"
+	else
+		fail "$1: endpoint bi=1"
+	fi
+}
+
+# --- scenario 1: hdm-db adoption --------------------------------------
+launch_t16 ",x-256b-flit=on,hdm-db=on,x-committed=hdm-db" \
+	",cxl-fmw.0.back-invalidate=on" || { fail "bi: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "bi: guest booted with a committed HDM-DB decoder"
+else
+	fail "bi: guest booted with a committed HDM-DB decoder"; exit 1
+fi
+if dmesg_has "adopting firmware-enabled BI"; then
+	ok "bi: firmware-enabled BI adopted"
+else
+	fail "bi: firmware-enabled BI adopted"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
+	ok "bi: committed decoder enumerated (mode=ram)"
+else
+	fail "bi: committed decoder enumerated (mode=ram)"
+fi
+check_assembled "bi"
+g dmesg > "$OUT/t16.dmesg" 2>/dev/null
+
+# --- scenario 2: re-adoption across guest reboot ----------------------
+g reboot
+sleep 3
+if wait_for_guest 180; then
+	ok "reboot: guest returned"
+else
+	fail "reboot: guest returned"; exit 1
+fi
+if dmesg_has "adopting firmware-enabled BI"; then
+	ok "reboot: BI re-adopted after reset re-commit"
+else
+	fail "reboot: BI re-adopted after reset re-commit"
+fi
+check_assembled "reboot"
+
+# --- scenario 3: hdm-h control ----------------------------------------
+launch_t16 ",x-committed=hdm-h" "" || { fail "hdm-h: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "hdm-h: guest booted with a committed HDM-H decoder"
+else
+	fail "hdm-h: guest booted with a committed HDM-H decoder"; exit 1
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
+	ok "hdm-h: committed decoder enumerated (mode=ram)"
+else
+	fail "hdm-h: committed decoder enumerated (mode=ram)"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/bi)" = 0 ]; then
+	ok "hdm-h: endpoint bi=0"
+else
+	fail "hdm-h: endpoint bi=0"
+fi
+if assembly_gap; then
+	skip "hdm-h: region commit (kernel lacks passthrough assembly)"
+elif [ "$(g cat /sys/bus/cxl/devices/region0/commit)" = 1 ]; then
+	ok "hdm-h: auto-assembled region committed"
+else
+	fail "hdm-h: auto-assembled region committed"
+fi
+
+# --- scenario 4: BI decoder under a non-BI window ---------------------
+launch_t16 ",x-256b-flit=on,hdm-db=on,x-committed=hdm-db" "" || \
+	{ fail "neg: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "neg: guest booted (BI decoder, non-BI window)"
+else
+	fail "neg: guest booted (BI decoder, non-BI window)"; exit 1
+fi
+if dmesg_has "BI decoder in a non-BI window"; then
+	ok "neg: rejected per 9.18.1.3 Window Restrictions"
+else
+	fail "neg: rejected per 9.18.1.3 Window Restrictions"
+fi
+if [ "$(g ls /sys/bus/cxl/devices/ | grep -c '^region0$')" -gt 0 ]; then
+	fail "neg: no region assembled"
+else
+	ok "neg: no region assembled"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
+	ok "neg: endpoint survives (adopt-then-gate layering)"
+else
+	fail "neg: endpoint survives (adopt-then-gate layering)"
+fi
+
+# --- scenario 5: combined 3-HB machine (per-device independence) ------
+# One boot, three single-RP host bridges: hdm-db in a BI window
+# (adopts + assembles), hdm-h in a plain window (control), hdm-db in a
+# plain window (rejected). Exercises x-committed window auto-selection
+# with several windows present and the adopt/reject paths coexisting.
+launch_qemu \
+  -object memory-backend-ram,id=m0,share=on,size=256M \
+  -object memory-backend-ram,id=m1,share=on,size=256M \
+  -object memory-backend-ram,id=m2,share=on,size=256M \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device pxb-cxl,bus_nr=64,bus=pcie.0,id=cxl.2 \
+  -device pxb-cxl,bus_nr=128,bus=pcie.0,id=cxl.3 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp1,chassis=0,slot=2 \
+  -device cxl-rp,port=0,bus=cxl.2,id=rp2,chassis=1,slot=2 \
+  -device cxl-rp,port=0,bus=cxl.3,id=rp3,chassis=2,slot=2 \
+  -device cxl-type3,bus=rp1,volatile-memdev=m0,id=vmem0,sn=0x1,x-256b-flit=on,hdm-db=on,x-committed=hdm-db \
+  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,x-committed=hdm-h \
+  -device cxl-type3,bus=rp3,volatile-memdev=m2,id=vmem2,sn=0x3,x-256b-flit=on,hdm-db=on,x-committed=hdm-db \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on,cxl-fmw.1.targets.0=cxl.2,cxl-fmw.1.size=4G,cxl-fmw.1.interleave-granularity=4k,cxl-fmw.2.targets.0=cxl.3,cxl-fmw.2.size=4G,cxl-fmw.2.interleave-granularity=4k \
+  || { fail "combined: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "combined: guest booted (3 HBs, one x-committed flavor each)"
+else
+	fail "combined: guest booted (3 HBs, one x-committed flavor each)"
+	exit 1
+fi
+
+# Resolve each device's endpoint decoder by memdev serial number.
+dec_of_sn() {
+	g 'for m in /sys/bus/cxl/devices/mem*; do
+		s=$(cat $m/serial 2>/dev/null)
+		[ "$s" = "'"$1"'" ] || continue
+		mem=$(basename $m)
+		for ep in /sys/bus/cxl/devices/endpoint*; do
+			[ -d "$ep" ] || continue
+			u=$(basename $(readlink -f $ep/uport))
+			[ "$u" = "$mem" ] || continue
+			basename $(ls -d $ep/decoder*.0 | head -1)
+			exit
+		done
+	done'
+}
+DA=$(dec_of_sn 0x1)
+DB=$(dec_of_sn 0x2)
+DC=$(dec_of_sn 0x3)
+if [ -n "$DA" ] && [ -n "$DB" ] && [ -n "$DC" ]; then
+	ok "combined: all three endpoints enumerated ($DA $DB $DC)"
+else
+	fail "combined: all three endpoints enumerated (DA=$DA DB=$DB DC=$DC)"
+	exit 1
+fi
+
+nadopt=$(g dmesg | grep -c "adopting firmware-enabled BI")
+if [ "$nadopt" = 2 ]; then
+	ok "combined: both hdm-db devices adopted (2)"
+else
+	fail "combined: both hdm-db devices adopted (got $nadopt, want 2)"
+fi
+nrej=$(g dmesg | grep -c "BI decoder in a non-BI window")
+if [ "$nrej" = 1 ]; then
+	ok "combined: exactly one non-BI-window reject"
+else
+	fail "combined: exactly one non-BI-window reject (got $nrej)"
+fi
+if assembly_gap; then
+	skip "combined: two regions assembled (kernel lacks passthrough assembly)"
+	skip "combined: hdm-db endpoint bi=1 (kernel lacks passthrough assembly)"
+else
+	nreg=$(g ls /sys/bus/cxl/devices/ | grep -c "^region[0-9]*$")
+	if [ "$nreg" = 2 ]; then
+		ok "combined: two regions assembled (BI + HDM-H)"
+	else
+		fail "combined: two regions assembled (got $nreg)"
+	fi
+	if [ "$(g cat /sys/bus/cxl/devices/$DA/bi)" = 1 ]; then
+		ok "combined: hdm-db endpoint bi=1"
+	else
+		fail "combined: hdm-db endpoint bi=1"
+	fi
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DB/bi)" = 0 ]; then
+	ok "combined: hdm-h endpoint bi=0"
+else
+	fail "combined: hdm-h endpoint bi=0"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DC/mode)" = ram ] && \
+   [ "$(g cat /sys/bus/cxl/devices/$DC/bi)" = 0 ]; then
+	ok "combined: rejected endpoint survives, bi=0"
+else
+	fail "combined: rejected endpoint survives, bi=0"
+fi
+
+exit $((FAIL != 0))
