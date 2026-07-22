@@ -27,6 +27,10 @@ CXL=/sys/bus/cxl/devices
 PASS=0; FAIL=0; N=0
 ok()   { N=$((N+1)); PASS=$((PASS+1)); echo "ok $N - $1"; }
 fail() { N=$((N+1)); FAIL=$((FAIL+1)); echo "not ok $N - $1"; }
+# Always emit the TAP plan and summary, even on bail-out exits. An
+# EXIT trap does not alter the script's exit status.
+finish() { echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"; }
+trap finish EXIT
 expect_eq() {
 	if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (got '$2' want '$3')"; fi
 }
@@ -118,7 +122,7 @@ for i in $(seq 1 60); do
 done
 if [ ! -e "$CXL/$mem_unbind" ]; then
 	fail "mem_unbind memdev returned after rebind"
-	echo "1..$N"; exit $((FAIL != 0))
+	exit $((FAIL != 0))
 fi
 ok "mem_unbind memdev returned after rebind"
 
@@ -145,6 +149,4 @@ expect_eq "mem_keep region still committed" \
 echo 0 > "$R/commit" 2>/dev/null
 echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
 
-echo "1..$N"
-echo "# passed: $PASS  failed: $FAIL"
 exit $((FAIL != 0))

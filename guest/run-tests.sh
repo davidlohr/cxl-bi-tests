@@ -30,6 +30,10 @@ check() { # check <desc> <cmd...>
 expect_eq() { # expect_eq <desc> <actual> <expected>
 	if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (got '$2' want '$3')"; fi
 }
+# Always emit the TAP plan and summary, even on bail-out exits. An
+# EXIT trap does not alter the script's exit status.
+finish() { echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"; }
+trap finish EXIT
 
 # ---------- enumeration helpers ------------------------------------
 root_decoder_bi() { # first root decoder whose cap_bi = 1
@@ -817,6 +821,4 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	;;
 esac
 
-echo "1..$N"
-echo "# passed: $PASS  failed: $FAIL"
 exit $((FAIL != 0))

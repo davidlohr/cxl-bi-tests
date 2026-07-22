@@ -19,6 +19,10 @@ fail() { N=$((N+1)); FAIL=$((FAIL+1)); echo "not ok $N - $1"; }
 expect_eq() {
 	if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (got '$2' want '$3')"; fi
 }
+# Always emit the TAP plan and summary, even on bail-out exits. An
+# EXIT trap does not alter the script's exit status.
+finish() { echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"; }
+trap finish EXIT
 
 root_decoder_bi() {
 	local d
@@ -106,7 +110,7 @@ for i in $(seq 1 60); do
 done
 if [ -z "$dec2" ]; then
 	fail "endpoint decoder returned after rebind"
-	echo "1..$N"; exit $((FAIL != 0))
+	exit $((FAIL != 0))
 fi
 ok "endpoint decoder returned after rebind ($dec2)"
 
@@ -153,7 +157,6 @@ if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null && \
 	ok "port-cycle: HDM-DB region up (bi=$(cat "$CXL/$dec/bi"))"
 else
 	fail "port-cycle: HDM-DB region up"
-	echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"
 	exit $((FAIL != 0))
 fi
 
@@ -207,6 +210,4 @@ else
 	ok "port-cycle: no 'BI setup failed'"
 fi
 
-echo "1..$N"
-echo "# passed: $PASS  failed: $FAIL"
 exit $((FAIL != 0))
