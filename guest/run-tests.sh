@@ -162,7 +162,13 @@ check_endpoint_bi_present() {
 			esac
 		done
 	done
-	ok "bi present on all endpoint decoders ($n found)"
+	# No decoders at all means enumeration failed (e.g. the endpoint
+	# was lost to an init_hdm_decoder() reject), not a pass.
+	if [ "$n" -gt 0 ]; then
+		ok "bi present on all endpoint decoders ($n found)"
+	else
+		fail "no endpoint decoders enumerated"
+	fi
 }
 
 # Switch decoders must NOT expose cap_bi or bi - those files live
