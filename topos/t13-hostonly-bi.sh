@@ -1,10 +1,12 @@
 #!/bin/bash
 # t13-hostonly-bi.sh - negative launch test: host-only + back-invalidate.
 #
-# CXL 4.0 9.14.3 forbids a CFMWS from advertising both host-only
-# coherency and back-invalidate. Upstream QEMU enforces this in the
-# machine-init code (see hw/cxl/cxl-host.c: cxl_fixed_memory_window_...)
-# so the launch itself must fail before the guest ever comes up.
+# Per the CXL 4.0 CFMWS Window Restrictions (9.18.1.3), a BI decoder
+# mapped to a host-only window "will result in undefined behavior",
+# so a window advertising both host-only coherency and back-invalidate
+# is rejected. Upstream QEMU enforces this in the machine-init code
+# (see hw/cxl/cxl-host.c: cxl_fixed_memory_window_...) so the launch
+# itself must fail before the guest ever comes up.
 #
 # This suite is host-only: it does not need a booted guest. It emits
 # TAP-ish output directly on stdout and exits 0 iff QEMU refused the
