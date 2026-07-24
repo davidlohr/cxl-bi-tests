@@ -825,6 +825,147 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	no_setup_failure
 	no_type_mismatch_warn
 	;;
+
+# --------------------------------------------------------------- t18
+t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
+	# Phase A: parallel unbind/bind flips of both endpoints by BDF
+	# (memN names recycle across a flip, BDFs never do) under a
+	# concurrent bi/cap_bi sysfs reader. Races nr_bi accounting on
+	# the shared dports, cxl_bi_setup vs cxl_bi_dealloc, and devres
+	# teardown against sysfs reads.
+	# Phase B: region create/commit/destroy churn with per-cycle
+	# timing: a rollback regression that drives a commit poll on a
+	# failed dport shows up as a 5s+ jump in cycle time.
+	# Both phases end with a full-function proof (2-way HDM-DB
+	# commit) and a dmesg hygiene sweep over the storm window.
+	check_cap_bi_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	mems=( $(all_mems) )
+	expect_eq "two memdevs enumerated" "${#mems[@]}" 2
+	bdf0=$(bdf_for_mem "${mems[0]}")
+	bdf1=$(bdf_for_mem "${mems[1]}")
+
+	# Pre-storm baseline: the topology works.
+	region=$(create_region "$rd" 2 256 "${mems[0]}" "${mems[1]}")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "pre-storm 2-way HDM-DB commit" || \
+		{ fail "pre-storm 2-way HDM-DB commit"; exit 1; }
+	destroy_region "$region"
+
+	# Fresh dmesg window: everything the storm provokes is swept
+	# by the hygiene checks below.
+	dmesg -C
+
+	FLIPS=12
+	flipfail=/tmp/t18-flipfail.$$
+	: > "$flipfail"
+	flip_storm() { # flip_storm <bdf>
+		local bdf=$1 i j
+		for i in $(seq 1 $FLIPS); do
+			echo "$bdf" > /sys/bus/pci/drivers/cxl_pci/unbind \
+				2>/dev/null || echo "$bdf unbind#$i" >> "$flipfail"
+			sleep 0.$((RANDOM % 4))
+			echo "$bdf" > /sys/bus/pci/drivers/cxl_pci/bind \
+				2>/dev/null || echo "$bdf bind#$i" >> "$flipfail"
+			for j in $(seq 1 50); do
+				[ -n "$(mem_for_bdf "$bdf")" ] && break
+				sleep 0.2
+			done
+			[ -n "$(mem_for_bdf "$bdf")" ] || \
+				echo "$bdf reprobe#$i" >> "$flipfail"
+		done
+	}
+	readflag=/tmp/t18-reader.$$
+	touch "$readflag"
+	( while [ -e "$readflag" ]; do
+		cat $CXL/decoder0.*/cap_bi $CXL/endpoint*/decoder*/bi \
+			>/dev/null 2>&1
+	  done ) &
+	reader_pid=$!
+	flip_storm "$bdf0" & p0=$!
+	flip_storm "$bdf1" & p1=$!
+	wait $p0 $p1
+	rm -f "$readflag"; wait $reader_pid 2>/dev/null
+	expect_eq "storm A: no unbind/bind/reprobe failures" \
+		"$(wc -l < "$flipfail")" 0
+	[ -s "$flipfail" ] && sed 's/^/# /' "$flipfail"
+	rm -f "$flipfail"
+
+	# Convergence: the bind write returns when cxl_pci probe is done,
+	# but the memdev -> endpoint port -> decoders chain (cxl_mem and
+	# cxl_port probes) completes after it. Wait at the decoder level.
+	wait_ep() { # wait_ep <bdf> -> echoes the endpoint decoder
+		local i m d
+		for i in $(seq 1 60); do
+			m=$(mem_for_bdf "$1")
+			if [ -n "$m" ]; then
+				d=$(ep_decoder_for_mem "$m")
+				[ -n "$d" ] && { echo "$d"; return 0; }
+			fi
+			sleep 0.5
+		done
+		return 1
+	}
+	dec0=$(wait_ep "$bdf0")
+	dec1=$(wait_ep "$bdf1")
+	mem0=$(mem_for_bdf "$bdf0")
+	mem1=$(mem_for_bdf "$bdf1")
+	if [ -n "$dec0" ] && [ -n "$dec1" ]; then
+		ok "storm A: both endpoints converged ($mem0 $mem1)"
+	else
+		fail "storm A: both endpoints converged (dec0='$dec0' dec1='$dec1')"
+		dmesg | grep -E "cxl.*probe|endpoint" | tail -8 | sed 's/^/# /'
+		exit 1
+	fi
+	check_endpoint_bi_present
+
+	# Phase B: region churn, per-cycle wall-clock bounded.
+	CYCLES=10 max_ms=0 churn_fail=0
+	for i in $(seq 1 $CYCLES); do
+		t0=$(date +%s%N)
+		region=$(create_region "$rd" 1 256 "$mem0")
+		if [ -z "$region" ] || ! commit_region "$region"; then
+			churn_fail=$((churn_fail + 1))
+		fi
+		[ -n "$region" ] && destroy_region "$region"
+		ms=$((($(date +%s%N) - t0) / 1000000))
+		[ "$ms" -gt "$max_ms" ] && max_ms=$ms
+	done
+	expect_eq "storm B: $CYCLES create/commit/destroy cycles clean" \
+		"$churn_fail" 0
+	echo "# storm B max cycle: ${max_ms}ms"
+	if [ "$max_ms" -lt 15000 ]; then
+		ok "storm B: no stalled cycle (max ${max_ms}ms < 15s)"
+	else
+		fail "storm B: no stalled cycle (max ${max_ms}ms, 5s-poll leak?)"
+	fi
+
+	# Post-storm full-function proof.
+	region=$(create_region "$rd" 2 256 "$mem0" "$mem1")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "post-storm 2-way HDM-DB commit" || \
+		fail "post-storm 2-way HDM-DB commit"
+	dec0=$(ep_decoder_for_mem "$mem0")
+	dec1=$(ep_decoder_for_mem "$mem1")
+	expect_eq "post-storm both endpoints bi=1" \
+		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+	[ -n "$region" ] && destroy_region "$region"
+
+	# Hygiene sweep over the whole storm window.
+	for pat in "WARNING:" "BUG:" "possible circular" "refcount_t" \
+		   "BI setup failed" "Failed to request region" \
+		   "mismatch decoder type"; do
+		if dmesg | grep -q "$pat"; then
+			fail "dmesg clean of '$pat'"
+			dmesg | grep "$pat" | head -2 | sed 's/^/# /'
+		else
+			ok "dmesg clean of '$pat'"
+		fi
+	done
+	;;
+
 esac
 
 exit $((FAIL != 0))
