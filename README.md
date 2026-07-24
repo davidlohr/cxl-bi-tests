@@ -13,7 +13,7 @@ Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
 
 ## Topologies
 
-Eighteen topology scripts under `topos/`, each varying one axis so the
+Nineteen topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
 | Suite | Topology | What it exercises |
@@ -36,6 +36,7 @@ gate under test is isolated.
 | **t16** | Firmware-committed decoders via QEMU `x-committed=hdm-h\|hdm-db` (host-driven, multi-boot) | Adoption of a committed HDM-DB decoder (plus re-adoption across reboot), HDM-H control, the BI-decoder-in-a-non-BI-window reject (§9.18.1.3), and a combined 3-HB boot asserting per-device independence of the adopt/reject paths. Scenarios 6-7 stage a committed 2-way interleave set (`x-committed-ways=2`, one BI window targeting two passthrough HBs): an all-BI control that must assemble into one HDM-DB region, and a mixed BI + HDM-H set that must never reach a committed region nor silently coerce the committed-BI decoder's type. Skips wholesale when QEMU lacks `x-committed` (scenarios 6-7: `x-committed-ways`); region-assembly checks SKIP when the kernel lacks the out-of-series passthrough assembly patch. |
 | **t17** | QMP runtime hotplug: one endpoint + two empty DSPs (host-driven) | BI setup driven by real pciehp events rather than driver rebind: hot-add enables BI through the fresh dport and commits a region; hot-remove with a committed HDM-DB region tears down WARN-free while the survivor's path stays enabled (`nr_bi`); add-after-remove completes the lifecycle. Skips if QEMU rejects cxl-type3 hotplug. |
 | **t18** | Same topology as t5, storm-driven | Concurrency storms: parallel unbind/bind flips of both endpoints under a live bi/cap_bi sysfs reader (races `nr_bi`, setup/dealloc, devres), then region create/commit/destroy churn with per-cycle timing to catch 5s commit-poll leaks, then a post-storm 2-way commit and a dmesg hygiene sweep (WARN, lockdep, refcount, leaked mappings). |
+| **t19** | 2-target BI window (window-level interleave), two BI endpoints on separate passthrough HBs | Manual counterpart of t16's committed 2-way set: a sysfs-created 2-way HDM-DB region across a deterministically iw=2 root decoder attaches, commits, reaches `bi=1` on both, and survives a full teardown + re-create cycle. |
 
 ## Configuration
 

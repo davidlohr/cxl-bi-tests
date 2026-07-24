@@ -100,7 +100,9 @@ create_region() {
 	region=$(cat "$CXL/$rd/create_ram_region") || return 1
 	echo "$region" > "$CXL/$rd/create_ram_region" 2>/dev/null || return 1
 	local R=$CXL/$region
-	echo 256 > "$R/interleave_granularity" 2>/dev/null || { echo ""; return 1; }
+	# Window-level interleave suites must match the CFMWS granularity.
+	echo "${CR_IG:-256}" > "$R/interleave_granularity" 2>/dev/null || \
+		{ echo ""; return 1; }
 	echo "$ways" > "$R/interleave_ways" 2>/dev/null || { echo ""; return 1; }
 	echo $((sz * ways)) > "$R/size" 2>/dev/null || { echo ""; return 1; }
 	local i=0 mem dec
@@ -964,6 +966,47 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 			ok "dmesg clean of '$pat'"
 		fi
 	done
+	;;
+
+# --------------------------------------------------------------- t19
+t19)	# manual window-level 2-way HDM-DB interleave across two HBs.
+	# The window has two targets, so the root decoder is iw=2 and
+	# region targets must be wired in window-target (BDF) order;
+	# 1-way regions cannot exist under this window (every stride
+	# crosses both HBs).
+	check_cap_bi_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	expect_eq "root decoder iw=2 (window-level interleave)" \
+		"$(cat "$CXL/$rd/interleave_ways")" 2
+	CR_IG=4096
+	mems=( $(for m in $CXL/mem*; do
+			m=$(basename "$m")
+			echo "$(bdf_for_mem "$m") $m"
+		 done | sort | awk '{print $2}') )
+	expect_eq "two memdevs enumerated" "${#mems[@]}" 2
+	dec0=$(ep_decoder_for_mem "${mems[0]}")
+	dec1=$(ep_decoder_for_mem "${mems[1]}")
+
+	region=$(create_region "$rd" 2 256 "${mems[0]}" "${mems[1]}")
+	[ -n "$region" ] && ok "create 2-way HDM-DB region (cross-HB)" \
+		|| { fail "create 2-way HDM-DB region (cross-HB)"; exit 1; }
+	check "commit 2-way HDM-DB region (cross-HB)" commit_region "$region"
+	expect_eq "both endpoints bi=1 post-commit" \
+		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
+	no_setup_failure
+	no_type_mismatch_warn
+	destroy_region "$region"
+	expect_eq "both endpoints bi=0 post-destroy" \
+		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "00"
+
+	region=$(create_region "$rd" 2 256 "${mems[0]}" "${mems[1]}")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "re-create + commit after full teardown" || \
+		fail "re-create + commit after full teardown"
+	[ -n "$region" ] && destroy_region "$region"
 	;;
 
 esac
