@@ -124,3 +124,9 @@ Failures map to specific root causes:
   completes the removal but the device stays in the QOM tree and the
   slot reads occupied forever. t17 therefore re-adds into a spare DSP
   instead of reusing the vacated slot.
+- A cxl_mem probe racing a sibling's switch-port reap can fail
+  terminally (silent -ENXIO; the memdev is left driverless and only a
+  rebind recovers it). The kernel does not promise otherwise, so t18
+  converges through at most one recovery rebind per endpoint and
+  reports it as a TAP diagnostic; only an unrecoverable memdev fails
+  the suite.

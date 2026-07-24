@@ -898,9 +898,18 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 	# Convergence: the bind write returns when cxl_pci probe is done,
 	# but the memdev -> endpoint port -> decoders chain (cxl_mem and
 	# cxl_port probes) completes after it. Wait at the decoder level.
-	wait_ep() { # wait_ep <bdf> -> echoes the endpoint decoder
+	#
+	# The kernel does not promise that a probe racing a sibling's
+	# switch-port reap succeeds: it may fail terminally, leaving the
+	# memdev driverless, recoverable by rebind (see README Known
+	# limitations). Assert the recoverable contract: allow one
+	# recovery rebind per endpoint and report it; only a memdev that
+	# stays endpoint-less after that is a failure.
+	recfile=/tmp/t18-recovered.$$
+	: > "$recfile"
+	wait_ep() { # wait_ep <bdf> <passes> -> echoes the endpoint decoder
 		local i m d
-		for i in $(seq 1 60); do
+		for i in $(seq 1 "$2"); do
 			m=$(mem_for_bdf "$1")
 			if [ -n "$m" ]; then
 				d=$(ep_decoder_for_mem "$m")
@@ -910,14 +919,32 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 		done
 		return 1
 	}
-	dec0=$(wait_ep "$bdf0")
-	dec1=$(wait_ep "$bdf1")
+	converge() { # converge <bdf> -> decoder; one recovery rebind allowed
+		local d m
+		d=$(wait_ep "$1" 20)
+		if [ -z "$d" ]; then
+			m=$(mem_for_bdf "$1")
+			if [ -n "$m" ] && [ ! -e "$CXL/$m/driver" ]; then
+				echo "$m" >> "$recfile"
+				echo "$m" > /sys/bus/cxl/drivers/cxl_mem/bind \
+					2>/dev/null
+				d=$(wait_ep "$1" 60)
+			fi
+		fi
+		echo "$d"
+	}
+	dec0=$(converge "$bdf0")
+	dec1=$(converge "$bdf1")
 	mem0=$(mem_for_bdf "$bdf0")
 	mem1=$(mem_for_bdf "$bdf1")
+	nrec=$(wc -l < "$recfile")
+	rm -f "$recfile"
+	[ "$nrec" -gt 0 ] && echo \
+		"# storm A: recovered $nrec endpoint(s) via rebind (probe lost reap race)"
 	if [ -n "$dec0" ] && [ -n "$dec1" ]; then
-		ok "storm A: both endpoints converged ($mem0 $mem1)"
+		ok "storm A: both endpoints converged ($mem0 $mem1, recovered=$nrec)"
 	else
-		fail "storm A: both endpoints converged (dec0='$dec0' dec1='$dec1')"
+		fail "storm A: both endpoints converged (dec0='$dec0' dec1='$dec1' recovered=$nrec)"
 		dmesg | grep -E "cxl.*probe|endpoint" | tail -8 | sed 's/^/# /'
 		exit 1
 	fi
