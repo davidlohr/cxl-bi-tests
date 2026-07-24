@@ -13,7 +13,7 @@ Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
 
 ## Topologies
 
-Nineteen topology scripts under `topos/`, each varying one axis so the
+Twenty topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
 | Suite | Topology | What it exercises |
@@ -37,6 +37,7 @@ gate under test is isolated.
 | **t17** | QMP runtime hotplug: one endpoint + two empty DSPs (host-driven) | BI setup driven by real pciehp events rather than driver rebind: hot-add enables BI through the fresh dport and commits a region; hot-remove with a committed HDM-DB region tears down WARN-free while the survivor's path stays enabled (`nr_bi`); add-after-remove completes the lifecycle. Skips if QEMU rejects cxl-type3 hotplug. |
 | **t18** | Same topology as t5, storm-driven | Concurrency storms: parallel unbind/bind flips of both endpoints under a live bi/cap_bi sysfs reader (races `nr_bi`, setup/dealloc, devres), then region create/commit/destroy churn with per-cycle timing to catch 5s commit-poll leaks, then a post-storm 2-way commit and a dmesg hygiene sweep (WARN, lockdep, refcount, leaked mappings). |
 | **t19** | 2-target BI window (window-level interleave), two BI endpoints on separate passthrough HBs | Manual counterpart of t16's committed 2-way set: a sysfs-created 2-way HDM-DB region across a deterministically iw=2 root decoder attaches, commits, reaches `bi=1` on both, and survives a full teardown + re-create cycle. |
+| **t20** | Same shape as t19, second device host-only coherent | Manual interleave across mixed coherency models: the 2-way HDM-DB attach rejects the plain target in both wiring orders (device gates: "BI not enabled on device" / "HDM is host-only coherent"), nothing is left committed, no WARNs. t19 is the paired positive control. |
 
 ## Configuration
 

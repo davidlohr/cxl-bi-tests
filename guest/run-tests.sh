@@ -1009,6 +1009,61 @@ t19)	# manual window-level 2-way HDM-DB interleave across two HBs.
 	[ -n "$region" ] && destroy_region "$region"
 	;;
 
+# --------------------------------------------------------------- t20
+t20)	# manual interleave mixing coherency models must reject. Same
+	# window shape as t19 (which is the passing control), but the
+	# second device is host-only coherent: the 2-way HDM-DB attach
+	# must reject the plain target in either wiring order, with no
+	# WARNs and nothing left committed. No 1-way fallback exists
+	# under a 2-target window, so the BI device is classified from
+	# the 'BI requests enabled' BDF instead of a probe commit.
+	check_cap_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	CR_IG=4096
+	mems=( $(all_mems) )
+	expect_eq "two memdevs enumerated" "${#mems[@]}" 2
+
+	expect_eq "exactly one endpoint enabled BI" \
+		"$(dmesg | grep -c 'BI requests enabled')" 1
+	bdf_bi=$(dmesg | grep "BI requests enabled" | head -1 | \
+		 grep -oE '[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]')
+	m_bi=$(mem_for_bdf "$bdf_bi")
+	m_nobi=
+	for m in "${mems[@]}"; do
+		[ "$m" = "$m_bi" ] || m_nobi=$m
+	done
+	[ -n "$m_bi" ] && [ -n "$m_nobi" ] && \
+		ok "classified BI ($m_bi) vs host-only ($m_nobi) endpoints" || \
+		{ fail "classified BI vs host-only endpoints"; exit 1; }
+
+	for order in "$m_bi $m_nobi" "$m_nobi $m_bi"; do
+		set -- $order
+		region=$(create_region "$rd" 2 256 "$1" "$2")
+		if [ -n "$region" ] && commit_region "$region" 2>/dev/null; then
+			fail "mixed 2-way rejected (order $1,$2)"
+			destroy_region "$region"
+		else
+			ok "mixed 2-way rejected (order $1,$2)"
+			[ -n "$region" ] && destroy_region "$region"
+		fi
+	done
+	if dmesg | grep -qE "BI not enabled on device|HDM is host-only coherent"; then
+		ok "device coherency gate diagnostic present"
+	else
+		fail "device coherency gate diagnostic present"
+	fi
+	ncommitted=0
+	for r in $CXL/region*/commit; do
+		[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && ncommitted=$((ncommitted+1))
+	done
+	expect_eq "nothing left committed after mixed attempts" \
+		"$ncommitted" 0
+	d_nobi=$(ep_decoder_for_mem "$m_nobi")
+	expect_eq "host-only endpoint survives, bi=0" \
+		"$(cat "$CXL/$d_nobi/bi")" 0
+	no_type_mismatch_warn
+	;;
 esac
 
 exit $((FAIL != 0))
