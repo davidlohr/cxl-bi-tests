@@ -84,17 +84,19 @@ declare -A TOPO=(
 	[t14]=t14-mixed-cfmws.sh
 	[t15]=t15-decoder-reuse.sh
 	[t16]=t16-autodiscover.sh
+	[t17]=t17-hotplug.sh
 )
 # Host-driven suites: the topology script emits TAP directly instead
 # of pushing run-tests.sh into a guest. t13 is a negative launch (no
 # guest at all); t16 orchestrates its own multi-boot x-committed
-# scenarios. run_suite handles them below.
-HOST_ONLY_SUITES=" t13 t16 "
+# scenarios; t17 interleaves QMP hotplug with guest checks. run_suite
+# handles them below.
+HOST_ONLY_SUITES=" t13 t16 t17 "
 # Default order: happy paths first, then mixed configs / fail-closed
 # gates, then the deeper topologies, then the guest-less checks. Later
 # suites depend on earlier invariants (region create, root cap_bi,
 # endpoint bi) already passing.
-ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t16 t13"
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t16 t17 t13"
 
 # No args: run everything. Otherwise run only the named suites, e.g.
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)

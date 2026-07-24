@@ -13,7 +13,7 @@ Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
 
 ## Topologies
 
-Sixteen topology scripts under `topos/`, each varying one axis so the
+Seventeen topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
 | Suite | Topology | What it exercises |
@@ -34,6 +34,7 @@ gate under test is isolated.
 | **t14** | Two CFMWS (BI + HDM-H) with two endpoints, BI CFMWS on one | BI and HDM-H root decoders coexist; endpoints bind to the correct one and cross-assignment rejects. |
 | **t15** | One endpoint, two CFMWS (BI + HDM-H) targeting the same RP | A decoder cycled out of an HDM-DB region reverts to its default `target_type`, then commits into an HDM-H region with no type-mismatch WARN. |
 | **t16** | Firmware-committed decoders via QEMU `x-committed=hdm-h\|hdm-db` (host-driven, multi-boot) | Adoption of a committed HDM-DB decoder (plus re-adoption across reboot), HDM-H control, the BI-decoder-in-a-non-BI-window reject (§9.18.1.3), and a combined 3-HB boot asserting per-device independence of the adopt/reject paths. Skips wholesale when QEMU lacks `x-committed`; region-assembly checks SKIP when the kernel lacks the out-of-series passthrough assembly patch. |
+| **t17** | QMP runtime hotplug: one endpoint + two empty DSPs (host-driven) | BI setup driven by real pciehp events rather than driver rebind: hot-add enables BI through the fresh dport and commits a region; hot-remove with a committed HDM-DB region tears down WARN-free while the survivor's path stays enabled (`nr_bi`); add-after-remove completes the lifecycle. Skips if QEMU rejects cxl-type3 hotplug. |
 
 ## Configuration
 
@@ -116,3 +117,7 @@ Failures map to specific root causes:
 - t12 classifies the BI endpoint by attempting the HDM-DB commit; if a
   future QEMU emulates BI on the non-`hdm-db` device too, switch to a
   positive `cap_bi` probe.
+- QEMU (v11.1.0-rc0) never finalizes a cxl-type3 unplug: the guest
+  completes the removal but the device stays in the QOM tree and the
+  slot reads occupied forever. t17 therefore re-adds into a spare DSP
+  instead of reusing the vacated slot.
