@@ -264,4 +264,100 @@ else
 	fail "combined: rejected endpoint survives, bi=0"
 fi
 
+# --- scenario 6: committed 2-way HDM-DB interleave (control) ----------
+# One BI window targeting two passthrough HBs, both devices committing
+# decoder 0 as members of the same 2-way set (x-committed-ways=2, the
+# endpoint stride mirrors the window's routing). The set must
+# auto-assemble into a single committed HDM-DB region.
+launch_2way() { # launch_2way <second-device-props>
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,share=on,size=256M \
+	  -object memory-backend-ram,id=m1,share=on,size=256M \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device pxb-cxl,bus_nr=64,bus=pcie.0,id=cxl.2 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp1,chassis=0,slot=2 \
+	  -device cxl-rp,port=0,bus=cxl.2,id=rp2,chassis=1,slot=2 \
+	  -device cxl-type3,bus=rp1,volatile-memdev=m0,id=vmem0,sn=0x1,x-256b-flit=on,hdm-db=on,x-committed=hdm-db,x-committed-ways=2 \
+	  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,"$1" \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.targets.1=cxl.2,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+}
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-committed-ways"; then
+	skip "qemu cxl-type3 lacks x-committed-ways (2-way + mixed scenarios)"
+	exit $((FAIL != 0))
+fi
+
+launch_2way "x-256b-flit=on,hdm-db=on,x-committed=hdm-db,x-committed-ways=2" \
+	|| { fail "2way: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "2way: guest booted (committed 2-way HDM-DB set)"
+else
+	fail "2way: guest booted (committed 2-way HDM-DB set)"; exit 1
+fi
+if [ "$(g dmesg | grep -c 'adopting firmware-enabled BI')" = 2 ]; then
+	ok "2way: both set members adopted"
+else
+	fail "2way: both set members adopted"
+fi
+if assembly_gap; then
+	skip "2way: region commit (kernel lacks passthrough assembly)"
+	skip "2way: both endpoints bi=1 (kernel lacks passthrough assembly)"
+else
+	if dmesg_has "created HDM-DB region" && \
+	   [ "$(g cat /sys/bus/cxl/devices/region0/commit)" = 1 ]; then
+		ok "2way: single HDM-DB region committed across the set"
+	else
+		fail "2way: single HDM-DB region committed across the set"
+	fi
+	DA=$(dec_of_sn 0x1)
+	DB=$(dec_of_sn 0x2)
+	if [ "$(g cat /sys/bus/cxl/devices/$DA/bi)" = 1 ] && \
+	   [ "$(g cat /sys/bus/cxl/devices/$DB/bi)" = 1 ]; then
+		ok "2way: both endpoints bi=1"
+	else
+		fail "2way: both endpoints bi=1"
+	fi
+fi
+
+# --- scenario 7: mixed-coherency 2-way set must not assemble ----------
+# Same window, same set, but the second member commits host-only
+# (x-committed=hdm-h): a committed-BI decoder and a committed HDM-H
+# decoder describing one interleave set. Whatever the construct order,
+# this must never reach a committed region, and the committed-BI
+# decoder's coherency model is hardware fact - it must not be silently
+# coerced to the peer's model (the device is entitled to generate
+# BISnp for any HPA covered by a local decoder with BI=1, Table 8-157).
+launch_2way "x-committed=hdm-h,x-committed-ways=2" \
+	|| { fail "mixed: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "mixed: guest booted (BI + HDM-H committed 2-way set)"
+else
+	fail "mixed: guest booted (BI + HDM-H committed 2-way set)"; exit 1
+fi
+ncommitted=$(g 'c=0; for r in /sys/bus/cxl/devices/region*/commit; do
+	[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && c=$((c+1)); done; echo $c')
+if [ "$ncommitted" = 0 ]; then
+	ok "mixed: no committed region across the mixed set"
+else
+	fail "mixed: no committed region across the mixed set (got $ncommitted)"
+fi
+DA=$(dec_of_sn 0x1)
+if [ "$(g cat /sys/bus/cxl/devices/$DA/mode)" = ram ] && \
+   [ -n "$(dec_of_sn 0x2)" ]; then
+	ok "mixed: both endpoints survive"
+else
+	fail "mixed: both endpoints survive"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DA/target_type)" = accelerator ]; then
+	ok "mixed: committed-BI decoder type preserved (accelerator)"
+else
+	fail "mixed: committed-BI decoder type preserved (got '$(g cat /sys/bus/cxl/devices/$DA/target_type)')"
+fi
+if assembly_gap; then
+	skip "mixed: mismatch reject diagnostic (kernel lacks passthrough assembly)"
+elif [ "$(g dmesg | grep -cE 'coherency model mismatch|mismatch decoder type|BI not enabled on device')" -gt 0 ]; then
+	ok "mixed: mismatch rejected with a diagnostic"
+else
+	fail "mixed: mismatch rejected with a diagnostic"
+fi
+
 exit $((FAIL != 0))
