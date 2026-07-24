@@ -1,38 +1,20 @@
 # CXL Back-Invalidate (BI) test suite
 
-Boots QEMU with a set of BI-capable and BI-incapable CXL topologies, then
-runs an in-guest driver that exercises the kernel's HDM-DB region path,
-the `cxl_bi_setup`/`cxl_bi_dealloc` lifecycle, and the fail-closed gates
-around 256B Flit mode and the CFMWS BI restriction.
+Boots QEMU with BI-capable and BI-incapable CXL topologies, then runs
+an in-guest driver against the kernel's HDM-DB region support: the
+root `cap_bi` / endpoint `bi` sysfs ABI, the region attach gates, the
+`cxl_bi_setup`/`cxl_bi_dealloc` lifecycle, and the fail-closed paths
+(256B Flit, CFMWS BI restriction, non-BI devices). Enumeration,
+provisioning and lifetime only: BISnp/BIRsp wire behaviour is out of
+scope (QEMU does not emulate it).
 
-Requires a Linux kernel with CXL Back-Invalidate support (HDM-DB
-regions, `cxl_bi_setup`/`cxl_bi_dealloc`, root `cap_bi` and endpoint
-`bi` sysfs attributes) and a QEMU with `hdm-db`, `x-256b-flit`, and
-`cxl-fmw.N.back-invalidate` available on the CXL machine/devices.
-
-## Scope
-
-The suite validates enumeration, region provisioning, and lifetime
-management. There is no BI data path here: BISnp/BIRsp wire behaviour
-is out of scope (QEMU does not emulate it). What we do check:
-
-- Root decoder ABI: `cap_bi` tracks the CFMWS BI restriction.
-- Endpoint decoder ABI: `bi` reflects HDM-DB configuration state.
-- `cxl_bi_setup` walk: verify the topology, enable BI on every dport,
-  set `cxlds->bi`. Fail-closed on missing 256B Flit or missing BI
-  Decoder capability anywhere in the path.
-- `cxl_region_attach` gates: reject BI-flavored region attach when the
-  device isn't BI, or when the HDM's supported coherency is
-  incompatible with the region type.
-- Unbind/rebind lifecycle: `cxl_bi_dealloc` on unbind, fresh enable on
-  rebind, shared-RP `nr_bi` refcount across two endpoints.
-- Devres hygiene: hot-add/hot-remove does not leak the dport BI Decoder
-  mapping.
+Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
+`x-256b-flit` and `cxl-fmw.N.back-invalidate`.
 
 ## Topologies
 
-Fifteen topology scripts under `topos/`, each one small, each one
-varying one axis so the fail-closed gate under test is isolated.
+Sixteen topology scripts under `topos/`, each varying one axis so the
+gate under test is isolated.
 
 | Suite | Topology | What it exercises |
 |-------|----------|-------------------|
@@ -100,40 +82,12 @@ Each suite writes `<suite>.tap` (TAP output on stdout) and
 and `t5` additionally emit `t2-unbindrebind.{tap,dmesg}` and
 `t5-nrbi.{tap,dmesg}` for their phase-2 helpers.
 
-## Kernel invariants each suite locks in
-
-Mapping from BI kernel behavior to the suites that lock it in:
-
-- **BI register probing and dport mapping** — every suite that reaches
-  region commit exercises this; if the dport BI Decoder mapping ever
-  leaks across a hot-remove, the t2 and t5 phase-2 unbind/rebind cycles
-  surface `-EBUSY` on rebind.
-- **`cxl_bi_setup` topology walk** — happy paths in t1/t2/t5/t6/t9/t10;
-  the rollback path is exercised implicitly by the fail-closed gates in
-  t7/t8. The rollback must skip the failed dport (avoiding a redundant
-  commit poll on it), or t7/t8 boot times balloon by up to 5s per
-  aborted enable.
-- **HDM decoder coherency init** — `cxl_hdm->supported_coherency` drives
-  the endpoint decoder's default `target_type`. t4 exercises the
-  "device not BI-capable" attach reject; auto-committed decoders that
-  already carry the HDM BI bit are rejected with `-ENXIO`. t15 locks in
-  the region-detach path restoring the default `target_type`, so one
-  decoder can move between HDM-DB and HDM-H regions.
-- **HDM-DB region ABI** — root `cap_bi` and endpoint `bi` are exercised
-  in every suite. t3 verifies HDM-H region creation on a non-BI CFMWS;
-  t4 verifies the "BI not enabled on device" attach reject; t14
-  verifies coexistence of BI and HDM-H root decoders.
-- **CFMWS coherency flag naming** — `cap_ram` / `cap_pmem` cohabit
-  with `cap_bi` in the same attribute group; anything reading `cap_bi`
-  transitively covers this.
-
 ## Diagnostics
 
 Failures map to specific root causes:
 
-- Missing `cap_bi` on root decoders → kernel lacks the HDM-DB region
-  ABI, or the attribute group's `is_visible` is misconfigured.
-- Missing `bi` on endpoint decoders → same as above, endpoint side.
+- Missing `cap_bi` (root) or `bi` (endpoint) → kernel lacks the HDM-DB
+  region ABI, or the attribute group's `is_visible` is misconfigured.
 - `BI setup failed` in dmesg on t1/t2/t5/t6/t9 → topology walk failed
   where it should have succeeded (register probing, USP probe, or
   `nr_bi` accounting regression).
@@ -148,28 +102,17 @@ Failures map to specific root causes:
 
 ## Known limitations
 
-- No BI data-path validation: BISnp/BIRsp wire behaviour is out of
-  scope. QEMU does not currently emulate the response side.
-- No BI-ID commit timeout injection: the suite has no way to make QEMU
-  refuse a `__cxl_bi_commit_decoder()` poll. If QEMU grows a knob for
-  this, a dedicated commit-timeout suite becomes straightforward.
-- t7 and t8 model non-flit hops (on the RP and DSP respectively) but
-  currently emit TAP `# SKIP` because upstream QEMU's `x-256b-flit=off`
-  device option is not reflected in the `LnkCtl2.FlitModeEnable` bit
-  that the kernel's `cxl_pci_flit_256()` reads. The driver detects
-  that `cxl_bi_setup` still succeeded (via a `bi_setup_succeeded`
-  probe against dmesg) and skips the fail-closed assertions. When
-  QEMU wires the flit register through, both suites flip to strict
-  fail-closed checks with no code changes.
-- t6 (USP without BI RT) is currently indistinguishable from t2 in
-  upstream QEMU. It is included as a documentation marker; add a
-  future `x-bi-rt=off` knob on `cxl-upstream` to make it distinct.
-- t13 is a host-only negative launch and does not use the guest
-  driver; it captures QEMU's stderr and grep's for the expected
-  `host-only coherent + back-invalidate` refusal message. If QEMU's
-  wording changes, adjust the regex there.
-- t12 identifies the BI vs non-BI endpoint by trying to commit an
-  HDM-DB region on each; on a topology where cxl_bi_setup succeeds on
-  both (e.g. a future QEMU that emulates BI on the non-`hdm-db` device
-  too) the classification will need to switch to a positive `cap_bi`
-  probe on the endpoint side.
+- No BISnp/BIRsp emulation and no commit-timeout injection in QEMU; a
+  knob for the latter would make a `__cxl_bi_commit_decoder()` timeout
+  suite straightforward.
+- t7/t8 emit `# SKIP`: upstream QEMU's `x-256b-flit=off` is not
+  reflected in the `LnkCtl2` flit bit that `cxl_pci_flit_256()` reads.
+  When QEMU wires it through, both flip to strict fail-closed checks
+  with no code changes.
+- t6 is indistinguishable from t2 until QEMU grows an `x-bi-rt=off`
+  knob on `cxl-upstream`.
+- t13 greps QEMU's stderr for the launch refusal; adjust the regex if
+  QEMU's wording changes.
+- t12 classifies the BI endpoint by attempting the HDM-DB commit; if a
+  future QEMU emulates BI on the non-`hdm-db` device too, switch to a
+  positive `cap_bi` probe.
