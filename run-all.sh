@@ -49,6 +49,22 @@ run_suite() { # run_suite <topo-script> <suite>
 		[ "$rc2" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
 
+	# t2 phase 3 races a decoder-attribute reader against repeated
+	# memdev-driven teardown with a committed HDM-DB region live at
+	# each unbind: covers the endpoint-vs-cxlds lifecycle orderings
+	# (teardown-before-null, unregister-before-endpoint-clear,
+	# dealloc-before-unmap).
+	if [ "$suite" = t2 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t2 phase 3: lifecycle reader race ---"
+		guest_scp "$BI_TESTS_DIR/guest/lifecycle-race-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "bash /tmp/lifecycle-race-phase.sh" \
+			| tee "$OUT/t2-lifecycle.tap"
+		local rc3=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t2-lifecycle.dmesg" 2>/dev/null
+		[ "$rc3" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
 	# t5 (2-way interleave) phase 2 exercises nr_bi refcount on the
 	# shared root port when one endpoint's memdev is hot-removed.
 	if [ "$suite" = t5 ] && [ "$rc" -eq 0 ]; then

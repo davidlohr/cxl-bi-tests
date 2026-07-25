@@ -83,8 +83,11 @@ guest_ssh "bash /tmp/run-tests.sh t2"
 
 Each suite writes `<suite>.tap` (TAP output on stdout) and
 `<suite>.dmesg` (full kernel log after the run) to `$OUT`. Suites `t2`
-and `t5` additionally emit `t2-unbindrebind.{tap,dmesg}` and
-`t5-nrbi.{tap,dmesg}` for their phase-2 helpers.
+and `t5` additionally emit `t2-unbindrebind.{tap,dmesg}`,
+`t2-lifecycle.{tap,dmesg}` and `t5-nrbi.{tap,dmesg}` for their phase
+helpers (t2 phase 3 races a decoder-attribute reader against repeated
+committed-region unbinds to pin the endpoint-vs-cxlds teardown
+orderings).
 
 ## Diagnostics
 
