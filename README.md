@@ -26,7 +26,7 @@ gate under test is isolated.
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
 | **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
 | **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop (a CXL 4.0 §9.14.3 mixed configuration). Emits TAP `# SKIP` today — see Known limitations. |
-| **t9** | Cascaded switches (two switch pairs), BI CFMWS | BI enables through both switch layers; an HDM-DB region commits across the cascade. |
+| **t9** | Cascaded switches (two switch pairs), BI CFMWS | BI enables through both switch layers; an HDM-DB region commits across the cascade. Phase 2 unbinds the outer switch port's driver with the region committed: the devres cascade tears the child subtree down first (`cxl_bi_dealloc` walks still-mapped ancestor dports), the emptied port is reaped, and a `cxl_mem` rebind re-enumerates the cascade; a second cycle fires the unbind under region churn and a decoder reader. |
 | **t10** | Two endpoints under **different** RPs, BI CFMWS | Each RP gets its own independent BI setup; an HDM-DB region commits (2-way cross-RP when the root allows it, otherwise a per-RP 1-way). |
 | **t11** | Endpoint with persistent memdev, BI CFMWS | An HDM-DB PMEM region commits and the endpoint reports `bi=1`. |
 | **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | A 2-way region attach across both rejects the non-BI target. |
@@ -82,12 +82,13 @@ guest_ssh "bash /tmp/run-tests.sh t2"
 ```
 
 Each suite writes `<suite>.tap` (TAP output on stdout) and
-`<suite>.dmesg` (full kernel log after the run) to `$OUT`. Suites `t2`
-and `t5` additionally emit `t2-unbindrebind.{tap,dmesg}`,
-`t2-lifecycle.{tap,dmesg}` and `t5-nrbi.{tap,dmesg}` for their phase
-helpers (t2 phase 3 races a decoder-attribute reader against repeated
-committed-region unbinds to pin the endpoint-vs-cxlds teardown
-orderings).
+`<suite>.dmesg` (full kernel log after the run) to `$OUT`. Suites
+`t2`, `t5` and `t9` additionally emit `t2-unbindrebind.{tap,dmesg}`,
+`t2-lifecycle.{tap,dmesg}`, `t5-nrbi.{tap,dmesg}` and
+`t9-cascade.{tap,dmesg}` for their phase helpers (t2 phase 3 races a
+decoder-attribute reader against repeated committed-region unbinds to
+pin the endpoint-vs-cxlds teardown orderings; t9 phase 2 covers the
+mid-level switch-port unbind cascade).
 
 ## Diagnostics
 

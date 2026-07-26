@@ -65,6 +65,22 @@ run_suite() { # run_suite <topo-script> <suite>
 		[ "$rc3" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
 
+	# t9 phase 2 unbinds the outer switch port's driver with a
+	# committed HDM-DB region live: the devres cascade must tear the
+	# child subtree down first (BI dealloc walks still-mapped
+	# ancestor dports), reap the emptied outer port, and rebuild the
+	# whole cascade on cxl_mem rebind.
+	if [ "$suite" = t9 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t9 phase 2: switch-unbind cascade ---"
+		guest_scp "$BI_TESTS_DIR/guest/switch-cascade-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "dmesg -C; bash /tmp/switch-cascade-phase.sh" \
+			| tee "$OUT/t9-cascade.tap"
+		local rc2=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t9-cascade.dmesg" 2>/dev/null
+		[ "$rc2" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
 	# t5 (2-way interleave) phase 2 exercises nr_bi refcount on the
 	# shared root port when one endpoint's memdev is hot-removed.
 	if [ "$suite" = t5 ] && [ "$rc" -eq 0 ]; then
