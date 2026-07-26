@@ -1091,6 +1091,76 @@ t20)	# manual interleave mixing coherency models must reject. Same
 		"$(cat "$CXL/$d_nobi/bi")" 0
 	no_type_mismatch_warn
 	;;
+
+# --------------------------------------------------------------- t21
+t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
+	# behind a switch, BI + HDM-H windows. When BI setup fails at
+	# endpoint probe (staged by qemu committing slower than the
+	# advertised timeout), the device must fail closed for HDM-DB
+	# regions but keep serving host-only ones on the same decoder.
+	check_cap_bi_present
+	check_endpoint_bi_present
+	rd_bi=$(root_decoder_bi)
+	rd_h=$(root_decoder_nobi)
+	[ -n "$rd_bi" ] || { fail "no BI root decoder"; exit 1; }
+	[ -n "$rd_h" ]  || { fail "no HDM-H root decoder"; exit 1; }
+	ok "both BI and HDM-H root decoders present"
+
+	mem=$(all_mems | head -1)
+	dec=$(ep_decoder_for_mem "$mem")
+	[ -n "$dec" ] || { fail "no endpoint decoder for $mem"; exit 1; }
+
+	if ! dmesg | grep -q "BI setup failed"; then
+		# Stock qemu commits within the advertised timeout, so
+		# setup succeeded and the fallback cannot be staged.
+		ok "fallback staging # SKIP needs qemu BI commit-latency mod"
+	else
+		ok "BI setup failed at boot (staged commit timeout)"
+		if dmesg | grep -q "BI-ID commit timed out"; then
+			ok "BI-ID commit timed out logged"
+		else
+			fail "BI-ID commit timed out logged"
+		fi
+		expect_eq "endpoint bi=0 after failed setup" \
+			"$(cat "$CXL/$dec/bi")" 0
+		expect_eq "decoder defaults to expander (BOTH)" \
+			"$(endpoint_decoder_target_type "$dec")" expander
+
+		# Fail closed: an HDM-DB attach on the BI window rejects.
+		region=$(create_region "$rd_bi" 1 256 "$mem")
+		if [ -z "$region" ]; then
+			ok "HDM-DB attach rejected with BI down"
+		elif commit_region "$region" 2>/dev/null; then
+			fail "HDM-DB region committed with BI down"
+			destroy_region "$region" "$rd_bi"
+		else
+			ok "HDM-DB attach rejected with BI down"
+			destroy_region "$region" "$rd_bi"
+		fi
+		if dmesg | grep -q "BI not enabled on device"; then
+			ok "attach gate: 'BI not enabled on device'"
+		else
+			fail "attach gate: 'BI not enabled on device'"
+		fi
+		# A failed attach leaves an uncommitted region shell
+		# behind; clear it so the HDM-H half starts clean.
+		for r in $(ls -d "$CXL"/region* 2>/dev/null); do
+			echo "$(basename "$r")" > "$CXL/$rd_bi/delete_region" \
+				2>/dev/null
+		done
+
+		# The same decoder must still serve host-only regions.
+		region=$(create_region "$rd_h" 1 256 "$mem")
+		[ -n "$region" ] || \
+			{ fail "HDM-H region create after BI failure"; exit 1; }
+		check "HDM-H commit after BI failure" commit_region "$region"
+		expect_eq "endpoint bi=0 (HDM-H)" "$(cat "$CXL/$dec/bi")" 0
+		expect_eq "decoder type stays expander" \
+			"$(endpoint_decoder_target_type "$dec")" expander
+		destroy_region "$region" "$rd_h"
+		no_type_mismatch_warn
+	fi
+	;;
 esac
 
 exit $((FAIL != 0))

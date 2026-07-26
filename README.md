@@ -38,6 +38,7 @@ gate under test is isolated.
 | **t18** | Same topology as t5, storm-driven | Concurrency storms: parallel unbind/bind flips of both endpoints under a live bi/cap_bi sysfs reader (races `nr_bi`, setup/dealloc, devres), then region create/commit/destroy churn with per-cycle timing to catch 5s commit-poll leaks, then a post-storm 2-way commit and a dmesg hygiene sweep (WARN, lockdep, refcount, leaked mappings). |
 | **t19** | 2-target BI window (window-level interleave), two BI endpoints on separate passthrough HBs | Manual counterpart of t16's committed 2-way set: a sysfs-created 2-way HDM-DB region across a deterministically iw=2 root decoder attaches, commits, reaches `bi=1` on both, and survives a full teardown + re-create cycle. |
 | **t20** | Same shape as t19, second device host-only coherent | Manual interleave across mixed coherency models: the 2-way HDM-DB attach rejects the plain target in both wiring orders (device gates: "BI not enabled on device" / "HDM is host-only coherent"), nothing is left committed, no WARNs. t19 is the paired positive control. |
+| **t21** | Same window pair as t15 (BI + HDM-H) but behind a switch, so the DSP commit machinery is in the path | BOTH-coherency fallback: with BI setup failed at boot (a qemu whose BI commit latches past the advertised 2s timeout), an HDM-DB attach fails closed ("BI not enabled on device") while a host-only region still creates, commits and tears down on the same endpoint decoder with `bi=0` and the default `expander` target_type throughout. SKIPs on stock QEMU, where BI setup succeeds. |
 
 ## Configuration
 
@@ -110,9 +111,10 @@ Failures map to specific root causes:
 
 ## Known limitations
 
-- No BISnp/BIRsp emulation and no commit-timeout injection in QEMU; a
-  knob for the latter would make a `__cxl_bi_commit_decoder()` timeout
-  suite straightforward.
+- No BISnp/BIRsp emulation in QEMU. Commit-timeout injection has no
+  QEMU knob either: t21 stages it with a local QEMU modification that
+  latches the BI commit past the advertised 2s timeout, and records
+  itself as a SKIP on stock QEMU.
 - t7/t8 emit `# SKIP`: upstream QEMU's `x-256b-flit=off` is not
   reflected in the `LnkCtl2` flit bit that `cxl_pci_flit_256()` reads.
   When QEMU wires it through, both flip to strict fail-closed checks
