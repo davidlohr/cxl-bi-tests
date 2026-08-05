@@ -28,8 +28,8 @@ trap finish EXIT
 root_decoder_bi() {
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 1 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
 	done
 }
 ep_decoder_for_mem() {
@@ -55,14 +55,15 @@ bdf=$(readlink -f "$CXL/$mem" | \
 echo "# t2 phase 3: lifecycle reader race ($CYCLES cycles)"
 dmesg -C
 
-# Reader: hammer decoder attributes (bi, target_type) and the root's
-# cap_bi through every teardown/rebuild. Globs transiently match
-# nothing mid-teardown; errors are expected and swallowed.
+# Reader: hammer decoder attributes (back_invalidate, target_type) and
+# the root's cap_back_invalidate through every teardown/rebuild. Globs
+# transiently match nothing mid-teardown; errors are expected and
+# swallowed.
 readflag=/tmp/lcr-reader.$$
 touch "$readflag"
 ( while [ -e "$readflag" ]; do
-	cat $CXL/decoder*/bi $CXL/decoder*/target_type \
-	    $CXL/decoder0.*/cap_bi >/dev/null 2>&1
+	cat $CXL/decoder*/back_invalidate $CXL/decoder*/target_type \
+	    $CXL/decoder0.*/cap_back_invalidate >/dev/null 2>&1
   done ) &
 reader=$!
 
@@ -122,7 +123,7 @@ echo ram > "$CXL/$dec/mode" 2>/dev/null
 echo $((256 << 20)) > "$CXL/$dec/dpa_size"
 echo "$dec" > "$R/target0" && echo 1 > "$R/commit" && \
 	ok "post-churn HDM-DB commit" || fail "post-churn HDM-DB commit"
-expect_eq "post-churn endpoint bi=1" "$(cat "$CXL/$dec/bi" 2>/dev/null)" 1
+expect_eq "post-churn endpoint bi=1" "$(cat "$CXL/$dec/back_invalidate" 2>/dev/null)" 1
 echo 0 > "$R/commit" 2>/dev/null
 echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
 

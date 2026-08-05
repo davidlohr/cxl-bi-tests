@@ -11,11 +11,11 @@
 #  - HDM decoder init: cxl_hdm_decoder->supported_coherency drives the
 #    endpoint decoder's default target_type; a decoder already
 #    committed with the HDM BI bit set is rejected (-ENXIO).
-#  - Root decoder ABI: cap_bi tracks the CFMWS BI restriction; a
+#  - Root decoder ABI: cap_back_invalidate tracks the CFMWS BI restriction; a
 #    region created under a BI root inherits DEVMEM (HDM-DB), otherwise
 #    HOSTONLYMEM (HDM-H).
-#  - Endpoint decoder ABI: bi reads 1 iff the decoder is committed in
-#    an HDM-DB region with the device in BI.
+#  - Endpoint decoder ABI: back_invalidate reads 1 iff the decoder is
+#    committed in an HDM-DB region with the device in BI.
 
 SUITE=${1:-t2}
 CXL=/sys/bus/cxl/devices
@@ -36,18 +36,18 @@ finish() { echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"; }
 trap finish EXIT
 
 # ---------- enumeration helpers ------------------------------------
-root_decoder_bi() { # first root decoder whose cap_bi = 1
+root_decoder_bi() { # first root decoder whose cap_back_invalidate = 1
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 1 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
 	done
 }
-root_decoder_nobi() { # first root decoder whose cap_bi = 0
+root_decoder_nobi() { # first root decoder whose cap_back_invalidate = 0
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 0 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 0 ] && { basename "$d"; return; }
 	done
 }
 root_decoder_any() { # any root decoder that can create ram regions
@@ -135,21 +135,22 @@ destroy_region() {
 }
 
 # ---------- generic invariants -----------------------------------
-# Every root decoder must expose cap_bi whether it is set or not.
+# Every root decoder must expose cap_back_invalidate whether it is set or not.
 # Verify presence + a valid 0/1 value.
-check_cap_bi_present() {
+check_cap_back_invalidate_present() {
 	local d v n=0
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || { fail "$d/cap_bi missing"; return; }
-		v=$(cat "$d/cap_bi")
+		[ -e "$d/cap_back_invalidate" ] || { fail "$d/cap_back_invalidate missing"; return; }
+		v=$(cat "$d/cap_back_invalidate")
 		case $v in 0|1) n=$((n+1)) ;; *)
-			fail "$d/cap_bi has bogus value '$v'"; return ;;
+			fail "$d/cap_back_invalidate has bogus value '$v'"; return ;;
 		esac
 	done
-	ok "cap_bi present on all root decoders ($n found)"
+	ok "cap_back_invalidate present on all root decoders ($n found)"
 }
 
-# The `bi` file is present on every endpoint decoder and reads 0 or 1.
+# The `back_invalidate` file is present on every endpoint decoder and
+# reads 0 or 1.
 check_endpoint_bi_present() {
 	local ep d v n=0
 	for ep in $CXL/endpoint*; do
@@ -157,24 +158,24 @@ check_endpoint_bi_present() {
 		# Skip decoders_committed (a leaf file, not a decoder dir).
 		for d in "$ep"/decoder*.*; do
 			[ -d "$d" ] || continue
-			[ -e "$d/bi" ] || { fail "$d/bi missing"; return; }
-			v=$(cat "$d/bi")
+			[ -e "$d/back_invalidate" ] || { fail "$d/back_invalidate missing"; return; }
+			v=$(cat "$d/back_invalidate")
 			case $v in 0|1) n=$((n+1)) ;; *)
-				fail "$d/bi has bogus value '$v'"; return ;;
+				fail "$d/back_invalidate has bogus value '$v'"; return ;;
 			esac
 		done
 	done
 	# No decoders at all means enumeration failed (e.g. the endpoint
 	# was lost to an init_hdm_decoder() reject), not a pass.
 	if [ "$n" -gt 0 ]; then
-		ok "bi present on all endpoint decoders ($n found)"
+		ok "back_invalidate present on all endpoint decoders ($n found)"
 	else
 		fail "no endpoint decoders enumerated"
 	fi
 }
 
-# Switch decoders must NOT expose cap_bi or bi - those files live
-# only on root decoders and endpoint decoders respectively.
+# Switch decoders must NOT expose cap_back_invalidate or back_invalidate -
+# those files live only on root decoders and endpoint decoders respectively.
 check_no_switch_bi_files() {
 	local d bad=0
 	for d in $CXL/decoder*; do
@@ -184,29 +185,30 @@ check_no_switch_bi_files() {
 		case $nm in decoder0.*) continue ;; esac
 		local par; par=$(readlink -f "$d/..")
 		basename "$par" | grep -q '^endpoint' && continue
-		if [ -e "$d/cap_bi" ] || [ -e "$d/bi" ]; then
+		if [ -e "$d/cap_back_invalidate" ] || [ -e "$d/back_invalidate" ]; then
 			bad=$((bad+1))
 		fi
 	done
-	expect_eq "no cap_bi/bi on switch decoders" "$bad" 0
+	expect_eq "no cap_back_invalidate/back_invalidate on switch decoders" "$bad" 0
 }
 
-# Read-only ABI: writes to bi/cap_bi must be rejected. Any bash error
-# on the write goes to /dev/null; we care only about the exit code.
+# Read-only ABI: writes to back_invalidate/cap_back_invalidate must be
+# rejected. Any bash error on the write goes to /dev/null; we care only
+# about the exit code.
 check_bi_ro() {
 	local ep=$1 rd; rd=$(root_decoder_bi)
-	if [ -z "$rd" ]; then ok "cap_bi RO (no BI root decoder)"; else
-		if ( echo 0 > "$CXL/$rd/cap_bi" ) 2>/dev/null; then
-			fail "cap_bi writable (should be RO)"
+	if [ -z "$rd" ]; then ok "cap_back_invalidate RO (no BI root decoder)"; else
+		if ( echo 0 > "$CXL/$rd/cap_back_invalidate" ) 2>/dev/null; then
+			fail "cap_back_invalidate writable (should be RO)"
 		else
-			ok "cap_bi read-only"
+			ok "cap_back_invalidate read-only"
 		fi
 	fi
 	if [ -n "$ep" ]; then
-		if ( echo 0 > "$CXL/$ep/bi" ) 2>/dev/null; then
-			fail "endpoint bi writable (should be RO)"
+		if ( echo 0 > "$CXL/$ep/back_invalidate" ) 2>/dev/null; then
+			fail "endpoint back_invalidate writable (should be RO)"
 		else
-			ok "endpoint bi read-only"
+			ok "endpoint back_invalidate read-only"
 		fi
 	fi
 }
@@ -245,23 +247,23 @@ no_type_mismatch_warn() {
 # (F_HOSTONLY|F_RAM) or HDM-DB (F_DEVMEM|F_BI|F_RAM); we verify the
 # visibility algebra matches the flags.
 check_create_visibility() { # <root_decoder>
-	local rd=$1 have_cap_bi have_cap_ram have_cap_pmem
-	have_cap_bi=$(cat "$CXL/$rd/cap_bi" 2>/dev/null || echo 0)
+	local rd=$1 have_cap_back_invalidate have_cap_ram have_cap_pmem
+	have_cap_back_invalidate=$(cat "$CXL/$rd/cap_back_invalidate" 2>/dev/null || echo 0)
 	have_cap_ram=$(cat "$CXL/$rd/cap_ram" 2>/dev/null || echo 0)
 	have_cap_pmem=$(cat "$CXL/$rd/cap_pmem" 2>/dev/null || echo 0)
-	# On an HDM-DB CFMWS: cap_bi=1, exactly one of ram/pmem is 1, and
+	# On an HDM-DB CFMWS: cap_back_invalidate=1, exactly one of ram/pmem is 1, and
 	# the corresponding create_*_region attr must be present.
-	# On an HDM-H CFMWS: cap_bi=0, same rule for ram/pmem visibility.
+	# On an HDM-H CFMWS: cap_back_invalidate=0, same rule for ram/pmem visibility.
 	if [ "$have_cap_ram" = 1 ]; then
 		if [ -e "$CXL/$rd/create_ram_region" ]; then
-			ok "$rd: create_ram_region present (cap_ram=1, cap_bi=$have_cap_bi)"
+			ok "$rd: create_ram_region present (cap_ram=1, cap_back_invalidate=$have_cap_back_invalidate)"
 		else
 			fail "$rd: create_ram_region missing despite cap_ram=1"
 		fi
 	fi
 	if [ "$have_cap_pmem" = 1 ]; then
 		if [ -e "$CXL/$rd/create_pmem_region" ]; then
-			ok "$rd: create_pmem_region present (cap_pmem=1, cap_bi=$have_cap_bi)"
+			ok "$rd: create_pmem_region present (cap_pmem=1, cap_back_invalidate=$have_cap_back_invalidate)"
 		else
 			fail "$rd: create_pmem_region missing despite cap_pmem=1"
 		fi
@@ -302,7 +304,7 @@ echo "# CXL BI guest tests, suite $SUITE, kernel $(uname -r)"
 case $SUITE in
 # ---------------------------------------------------------------- t1
 t1)	# minimal happy path: one endpoint directly under an RP.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	check_no_switch_bi_files
 
@@ -313,7 +315,7 @@ t1)	# minimal happy path: one endpoint directly under an RP.
 	mem=$(all_mems | head -1)
 	dec=$(ep_decoder_for_mem "$mem")
 	[ -n "$dec" ] || { fail "no endpoint decoder for $mem"; exit 1; }
-	expect_eq "endpoint bi=0 pre-region" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 pre-region" "$(cat "$CXL/$dec/back_invalidate")" 0
 	check_bi_ro "$dec"
 
 	# create + attach + commit HDM-DB region
@@ -323,15 +325,15 @@ t1)	# minimal happy path: one endpoint directly under an RP.
 	check "commit HDM-DB region" commit_region "$region"
 	expect_eq "endpoint decoder target_type=accelerator (DEVMEM)" \
 		"$(endpoint_decoder_target_type "$dec")" accelerator
-	expect_eq "endpoint bi=1 post-commit" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 post-commit" "$(cat "$CXL/$dec/back_invalidate")" 1
 	no_setup_failure
 	destroy_region "$region"
-	expect_eq "endpoint bi=0 post-destroy" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 post-destroy" "$(cat "$CXL/$dec/back_invalidate")" 0
 	;;
 
 # ---------------------------------------------------------------- t2
 t2)	# switched happy path: DSP + USP + RP + endpoint.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	check_no_switch_bi_files
 	# Expect at least one non-root cxl_port between memdev and root:
@@ -352,7 +354,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 	[ -n "$region" ] && ok "create HDM-DB region" \
 		|| { fail "create HDM-DB region"; exit 1; }
 	check "commit HDM-DB region under switch" commit_region "$region"
-	expect_eq "endpoint bi=1 (switched)" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 (switched)" "$(cat "$CXL/$dec/back_invalidate")" 1
 	expect_eq "endpoint decoders_committed bumped" \
 		"$(port_committed_count "$ep")" "$((pre_committed + 1))"
 	no_setup_failure
@@ -360,7 +362,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 
 	# Detach: reset commit, tear down region. Endpoint bi returns to 0.
 	destroy_region "$region"
-	expect_eq "endpoint bi=0 after destroy" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 after destroy" "$(cat "$CXL/$dec/back_invalidate")" 0
 	expect_eq "endpoint decoders_committed back to pre" \
 		"$(port_committed_count "$ep")" "$pre_committed"
 
@@ -371,7 +373,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 		ok "re-create + commit HDM-DB after full teardown" || \
 		fail "re-create + commit HDM-DB after full teardown"
 	expect_eq "endpoint bi=1 (recreated region)" \
-		"$(cat "$CXL/$dec/bi")" 1
+		"$(cat "$CXL/$dec/back_invalidate")" 1
 	destroy_region "$region"
 	no_type_mismatch_warn
 
@@ -392,7 +394,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 
 # ---------------------------------------------------------------- t3
 t3)	# BI-capable device, HDM-H (no BI) CFMWS. Region must be HOSTONLYMEM.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	if [ -n "$rd" ]; then
@@ -411,7 +413,7 @@ t3)	# BI-capable device, HDM-H (no BI) CFMWS. Region must be HOSTONLYMEM.
 	check "commit HDM-H region" commit_region "$region"
 	expect_eq "endpoint decoder target_type=expander (HOSTONLYMEM)" \
 		"$(endpoint_decoder_target_type "$dec")" expander
-	expect_eq "endpoint bi=0 (HDM-H)" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 (HDM-H)" "$(cat "$CXL/$dec/back_invalidate")" 0
 	# The BI walk itself must have found the topology capable but
 	# there was nothing on the CFMWS side to commit BI decoders for.
 	no_setup_failure
@@ -420,7 +422,7 @@ t3)	# BI-capable device, HDM-H (no BI) CFMWS. Region must be HOSTONLYMEM.
 
 # ---------------------------------------------------------------- t4
 t4)	# non-BI device, BI-restricted CFMWS. Attach must be rejected.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
 	mem=$(all_mems | head -1)
@@ -437,7 +439,7 @@ t4)	# non-BI device, BI-restricted CFMWS. Attach must be rejected.
 		if commit_region "$region" 2>/dev/null; then
 			# Verify the endpoint did not end up in HDM-DB mode.
 			expect_eq "endpoint bi=0 on non-BI device" \
-				"$(cat "$CXL/$dec/bi")" 0
+				"$(cat "$CXL/$dec/back_invalidate")" 0
 			fail "attach unexpectedly permitted for non-BI device"
 		else
 			ok "non-BI device rejected at region commit"
@@ -452,7 +454,7 @@ t4)	# non-BI device, BI-restricted CFMWS. Attach must be rejected.
 
 # ---------------------------------------------------------------- t5
 t5)	# 2-way interleave across two BI-capable endpoints under one switch.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -462,20 +464,20 @@ t5)	# 2-way interleave across two BI-capable endpoints under one switch.
 	dec0=$(ep_decoder_for_mem "${mems[0]}")
 	dec1=$(ep_decoder_for_mem "${mems[1]}")
 	expect_eq "both endpoints bi=0 pre-region" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "00"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "00"
 
 	region=$(create_region "$rd" 2 256 "${mems[0]}" "${mems[1]}")
 	[ -n "$region" ] && ok "create 2-way HDM-DB region" \
 		|| { fail "create 2-way HDM-DB region"; exit 1; }
 	check "commit 2-way HDM-DB region" commit_region "$region"
 	expect_eq "both endpoints bi=1 post-commit" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "11"
 	no_setup_failure
 
 	# Destroy resets both endpoints.
 	destroy_region "$region"
 	expect_eq "both endpoints bi=0 post-destroy" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "00"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "00"
 	# Phase 2 (nr_bi refcount via hot-remove) driven from run-all.sh.
 	;;
 
@@ -484,7 +486,7 @@ t6)	# USP RT optional per 8.2.4.26. With upstream QEMU this suite is
 	# effectively identical to t2; it exists to make the "USP without
 	# RT is allowed" invariant load-bearing so a regression on the
 	# @bi==NULL-allowed-for-USP branch of cxl_is_bi_capable() shows up.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
 	mem=$(all_mems | head -1)
@@ -494,7 +496,7 @@ t6)	# USP RT optional per 8.2.4.26. With upstream QEMU this suite is
 		|| { fail "create HDM-DB region"; exit 1; }
 	check "commit HDM-DB region" commit_region "$region"
 	expect_eq "endpoint bi=1 (USP RT variant)" \
-		"$(cat "$CXL/$dec/bi")" 1
+		"$(cat "$CXL/$dec/back_invalidate")" 1
 	no_setup_failure
 	destroy_region "$region"
 	;;
@@ -509,7 +511,7 @@ t7)	# RP uplink not in 256B Flit mode. Expected: cxl_is_bi_capable
 	# device option but doesn't propagate to LnkCtl2.FlitModeEnable,
 	# so cxl_pci_flit_256() still returns true and BI setup succeeds.
 	# Detect that here and emit TAP SKIPs instead of failures.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	if bi_setup_succeeded; then
 		skip_qemu_gap 3 \
 		    "QEMU x-256b-flit=off on RP does not reach LnkCtl2"
@@ -527,7 +529,7 @@ t7)	# RP uplink not in 256B Flit mode. Expected: cxl_is_bi_capable
 			[ -n "$region" ] && destroy_region "$region"
 		fi
 		expect_eq "endpoint bi stays 0 on non-flit" \
-			"$(cat "$CXL/$dec/bi")" 0
+			"$(cat "$CXL/$dec/back_invalidate")" 0
 		if dmesg_saw "BI not supported by topology" || \
 		   dmesg_saw "BI not enabled on device"; then
 			ok "dmesg reflects non-flit rejection"
@@ -541,7 +543,7 @@ t7)	# RP uplink not in 256B Flit mode. Expected: cxl_is_bi_capable
 t8)	# DSP not in 256B Flit mode. BI walk's DSP check fails, cxlds->bi=0.
 	# Same QEMU limitation as t7: `x-256b-flit=off` on cxl-downstream
 	# does not affect the flit-mode-enable register the kernel reads.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	if bi_setup_succeeded; then
 		skip_qemu_gap 2 \
 		    "QEMU x-256b-flit=off on DSP does not reach LnkCtl2"
@@ -570,7 +572,7 @@ t8)	# DSP not in 256B Flit mode. BI walk's DSP check fails, cxlds->bi=0.
 
 # ---------------------------------------------------------------- t9
 t9)	# cascaded switches: cxl_bi_setup walks two switch pairs.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	# Expect at least two non-root cxl_port entries (outer + inner switch).
 	nports=$(ls -d $CXL/port* 2>/dev/null | wc -l)
@@ -589,14 +591,14 @@ t9)	# cascaded switches: cxl_bi_setup walks two switch pairs.
 	[ -n "$region" ] && ok "create HDM-DB region (cascaded)" \
 		|| { fail "create HDM-DB region"; exit 1; }
 	check "commit HDM-DB region across cascade" commit_region "$region"
-	expect_eq "endpoint bi=1 (cascaded)" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 (cascaded)" "$(cat "$CXL/$dec/back_invalidate")" 1
 	no_setup_failure
 	destroy_region "$region"
 	;;
 
 # --------------------------------------------------------------- t10
 t10)	# cross-RP: two BI-capable endpoints under different RPs.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -617,7 +619,7 @@ t10)	# cross-RP: two BI-capable endpoints under different RPs.
 		if [ -n "$region" ] && commit_region "$region"; then
 			ok "commit 2-way cross-RP HDM-DB region"
 			expect_eq "both endpoints bi=1 (cross-RP)" \
-				"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+				"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "11"
 			destroy_region "$region"
 		else
 			ok "cross-RP 2-way commit rejected by root (expected on some hosts)"
@@ -632,13 +634,13 @@ t10)	# cross-RP: two BI-capable endpoints under different RPs.
 	[ -n "$region" ] && commit_region "$region" && \
 		ok "commit 1-way HDM-DB region on RP0" || \
 		fail "commit 1-way HDM-DB region on RP0"
-	expect_eq "mem0 endpoint bi=1" "$(cat "$CXL/$dec0/bi")" 1
+	expect_eq "mem0 endpoint bi=1" "$(cat "$CXL/$dec0/back_invalidate")" 1
 	destroy_region "$region"
 	;;
 
 # --------------------------------------------------------------- t11
 t11)	# PMEM HDM-DB region: create_pmem_region on the BI root.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -669,7 +671,7 @@ t11)	# PMEM HDM-DB region: create_pmem_region on the BI root.
 	echo "$sz" > "$CXL/$dec/dpa_size" || fail "dpa_size (pmem)"
 	echo "$dec" > "$R/target0" || fail "attach mem0 to pmem region"
 	check "commit HDM-DB pmem region" commit_region "$region"
-	expect_eq "endpoint bi=1 (pmem)" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 (pmem)" "$(cat "$CXL/$dec/back_invalidate")" 1
 	expect_eq "endpoint decoder target_type=accelerator (pmem)" \
 		"$(endpoint_decoder_target_type "$dec")" accelerator
 	no_setup_failure
@@ -681,7 +683,7 @@ t11)	# PMEM HDM-DB region: create_pmem_region on the BI root.
 
 # --------------------------------------------------------------- t12
 t12)	# One BI-capable + one non-BI endpoint under one switch, BI CFMWS.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -697,7 +699,7 @@ t12)	# One BI-capable + one non-BI endpoint under one switch, BI CFMWS.
 		d=$(ep_decoder_for_mem "$m")
 		r=$(create_region "$rd" 1 256 "$m")
 		if [ -n "$r" ] && commit_region "$r" 2>/dev/null; then
-			[ "$(cat "$CXL/$d/bi")" = 1 ] && m_bi=$m
+			[ "$(cat "$CXL/$d/back_invalidate")" = 1 ] && m_bi=$m
 			destroy_region "$r"
 		else
 			m_nobi=$m
@@ -729,7 +731,7 @@ t12)	# One BI-capable + one non-BI endpoint under one switch, BI CFMWS.
 
 # --------------------------------------------------------------- t14
 t14)	# Two CFMWS windows: one BI, one HDM-H, two independent endpoints.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd_bi=$(root_decoder_bi)
 	rd_h=$(root_decoder_nobi)
@@ -791,7 +793,7 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	# DEVMEM; deleting the region must restore the decoder's
 	# default target_type so a subsequent HDM-H region commits on
 	# the same decoder without the "mismatch decoder type" WARN.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	rd_bi=$(root_decoder_bi)
 	rd_h=$(root_decoder_nobi)
 	[ -n "$rd_bi" ] || { fail "no BI root decoder"; exit 1; }
@@ -810,7 +812,7 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	region=$(create_region "$rd_bi" 1 256 "$mem")
 	[ -n "$region" ] || { fail "HDM-DB region create"; exit 1; }
 	check "HDM-DB region commit" commit_region "$region"
-	expect_eq "endpoint bi=1 in HDM-DB region" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 in HDM-DB region" "$(cat "$CXL/$dec/back_invalidate")" 1
 	expect_eq "decoder type follows HDM-DB region" \
 		"$(endpoint_decoder_target_type "$dec")" accelerator
 	destroy_region "$region" "$rd_bi"
@@ -821,7 +823,7 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	region=$(create_region "$rd_h" 1 256 "$mem")
 	[ -n "$region" ] || { fail "HDM-H region create on recycled decoder"; exit 1; }
 	check "HDM-H region commit on recycled decoder" commit_region "$region"
-	expect_eq "endpoint bi=0 in HDM-H region" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 in HDM-H region" "$(cat "$CXL/$dec/back_invalidate")" 0
 	destroy_region "$region" "$rd_h"
 
 	no_setup_failure
@@ -832,15 +834,15 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 	# Phase A: parallel unbind/bind flips of both endpoints by BDF
 	# (memN names recycle across a flip, BDFs never do) under a
-	# concurrent bi/cap_bi sysfs reader. Races nr_bi accounting on
-	# the shared dports, cxl_bi_setup vs cxl_bi_dealloc, and devres
-	# teardown against sysfs reads.
+	# concurrent back_invalidate/cap_back_invalidate sysfs reader.
+	# Races nr_bi accounting on the shared dports, cxl_bi_setup vs
+	# cxl_bi_dealloc, and devres teardown against sysfs reads.
 	# Phase B: region create/commit/destroy churn with per-cycle
 	# timing: a rollback regression that drives a commit poll on a
 	# failed dport shows up as a 5s+ jump in cycle time.
 	# Both phases end with a full-function proof (2-way HDM-DB
 	# commit) and a dmesg hygiene sweep over the storm window.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -882,7 +884,7 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 	readflag=/tmp/t18-reader.$$
 	touch "$readflag"
 	( while [ -e "$readflag" ]; do
-		cat $CXL/decoder0.*/cap_bi $CXL/endpoint*/decoder*/bi \
+		cat $CXL/decoder0.*/cap_back_invalidate $CXL/endpoint*/decoder*/back_invalidate \
 			>/dev/null 2>&1
 	  done ) &
 	reader_pid=$!
@@ -979,7 +981,7 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 	dec0=$(ep_decoder_for_mem "$mem0")
 	dec1=$(ep_decoder_for_mem "$mem1")
 	expect_eq "post-storm both endpoints bi=1" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "11"
 	[ -n "$region" ] && destroy_region "$region"
 
 	# Hygiene sweep over the whole storm window.
@@ -1001,7 +1003,7 @@ t19)	# manual window-level 2-way HDM-DB interleave across two HBs.
 	# region targets must be wired in window-target (BDF) order;
 	# 1-way regions cannot exist under this window (every stride
 	# crosses both HBs).
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -1021,13 +1023,13 @@ t19)	# manual window-level 2-way HDM-DB interleave across two HBs.
 		|| { fail "create 2-way HDM-DB region (cross-HB)"; exit 1; }
 	check "commit 2-way HDM-DB region (cross-HB)" commit_region "$region"
 	expect_eq "both endpoints bi=1 post-commit" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "11"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "11"
 	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
 	no_setup_failure
 	no_type_mismatch_warn
 	destroy_region "$region"
 	expect_eq "both endpoints bi=0 post-destroy" \
-		"$(cat "$CXL/$dec0/bi")$(cat "$CXL/$dec1/bi")" "00"
+		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "00"
 
 	region=$(create_region "$rd" 2 256 "${mems[0]}" "${mems[1]}")
 	[ -n "$region" ] && commit_region "$region" && \
@@ -1044,7 +1046,7 @@ t20)	# manual interleave mixing coherency models must reject. Same
 	# WARNs and nothing left committed. No 1-way fallback exists
 	# under a 2-target window, so the BI device is classified from
 	# the 'BI requests enabled' BDF instead of a probe commit.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
 	CR_IG=4096
@@ -1088,7 +1090,7 @@ t20)	# manual interleave mixing coherency models must reject. Same
 		"$ncommitted" 0
 	d_nobi=$(ep_decoder_for_mem "$m_nobi")
 	expect_eq "host-only endpoint survives, bi=0" \
-		"$(cat "$CXL/$d_nobi/bi")" 0
+		"$(cat "$CXL/$d_nobi/back_invalidate")" 0
 	no_type_mismatch_warn
 	;;
 
@@ -1098,7 +1100,7 @@ t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
 	# endpoint probe (staged by qemu committing slower than the
 	# advertised timeout), the device must fail closed for HDM-DB
 	# regions but keep serving host-only ones on the same decoder.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd_bi=$(root_decoder_bi)
 	rd_h=$(root_decoder_nobi)
@@ -1122,7 +1124,7 @@ t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
 			fail "BI-ID commit timed out logged"
 		fi
 		expect_eq "endpoint bi=0 after failed setup" \
-			"$(cat "$CXL/$dec/bi")" 0
+			"$(cat "$CXL/$dec/back_invalidate")" 0
 		expect_eq "decoder defaults to expander (BOTH)" \
 			"$(endpoint_decoder_target_type "$dec")" expander
 
@@ -1154,7 +1156,7 @@ t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
 		[ -n "$region" ] || \
 			{ fail "HDM-H region create after BI failure"; exit 1; }
 		check "HDM-H commit after BI failure" commit_region "$region"
-		expect_eq "endpoint bi=0 (HDM-H)" "$(cat "$CXL/$dec/bi")" 0
+		expect_eq "endpoint bi=0 (HDM-H)" "$(cat "$CXL/$dec/back_invalidate")" 0
 		expect_eq "decoder type stays expander" \
 			"$(endpoint_decoder_target_type "$dec")" expander
 		destroy_region "$region" "$rd_h"
@@ -1168,7 +1170,7 @@ t22)	# BI device reporting Unknown coherency models. The kernel must
 	# when it joins an HDM-DB region: Unknown says nothing about
 	# whether Target Range Type is writable, so refusing it would
 	# also exclude devices that support both models silently.
-	check_cap_bi_present
+	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	rd=$(root_decoder_bi)
 	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
@@ -1180,7 +1182,7 @@ t22)	# BI device reporting Unknown coherency models. The kernel must
 	# decoder that does not report device-coherent only.
 	expect_eq "decoder defaults to expander" \
 		"$(endpoint_decoder_target_type "$dec")" expander
-	expect_eq "endpoint bi=0 before attach" "$(cat "$CXL/$dec/bi")" 0
+	expect_eq "endpoint bi=0 before attach" "$(cat "$CXL/$dec/back_invalidate")" 0
 	no_setup_failure
 
 	region=$(create_region "$rd" 1 256 "$mem")
@@ -1189,9 +1191,9 @@ t22)	# BI device reporting Unknown coherency models. The kernel must
 	# The inheritance under test: host-only default -> device-coherent.
 	expect_eq "decoder inherits accelerator on attach" \
 		"$(endpoint_decoder_target_type "$dec")" accelerator
-	expect_eq "endpoint bi=1 on attach" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 on attach" "$(cat "$CXL/$dec/back_invalidate")" 1
 	check "HDM-DB commit (Unknown coherency)" commit_region "$region"
-	expect_eq "endpoint bi=1 committed" "$(cat "$CXL/$dec/bi")" 1
+	expect_eq "endpoint bi=1 committed" "$(cat "$CXL/$dec/back_invalidate")" 1
 
 	destroy_region "$region" "$rd"
 	expect_eq "decoder back to expander after destroy" \

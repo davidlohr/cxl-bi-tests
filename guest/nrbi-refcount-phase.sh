@@ -38,8 +38,8 @@ expect_eq() {
 root_decoder_bi() {
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 1 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
 	done
 }
 ep_decoder_for_mem() {
@@ -86,7 +86,7 @@ echo ram > "$CXL/$dec_keep/mode" 2>/dev/null
 echo "$sz" > "$CXL/$dec_keep/dpa_size"
 echo "$dec_keep" > "$R/target0"
 echo 1 > "$R/commit" || { echo "Bail out! commit"; exit 1; }
-expect_eq "mem_keep bi=1 pre-unbind" "$(cat "$CXL/$dec_keep/bi")" 1
+expect_eq "mem_keep bi=1 pre-unbind" "$(cat "$CXL/$dec_keep/back_invalidate")" 1
 
 # --- unbind mem_unbind (no region on it, BI still enabled on device)
 dmesg -C
@@ -101,7 +101,7 @@ done
 # mem_keep must be unaffected: its endpoint bi stays 1, its region
 # stays committed, and no BI dport-disable failure landed in dmesg.
 expect_eq "mem_keep bi=1 after partial unbind" \
-	"$(cat "$CXL/$dec_keep/bi")" 1
+	"$(cat "$CXL/$dec_keep/back_invalidate")" 1
 expect_eq "mem_keep region still committed" \
 	"$(cat "$R/commit")" 1
 if dmesg | grep -qE "BI dport disable failed|BI setup failed"; then
@@ -141,7 +141,7 @@ fi
 
 # mem_keep must still be bi=1 and committed after the whole cycle.
 expect_eq "mem_keep bi=1 after rebind cycle" \
-	"$(cat "$CXL/$dec_keep/bi")" 1
+	"$(cat "$CXL/$dec_keep/back_invalidate")" 1
 expect_eq "mem_keep region still committed" \
 	"$(cat "$R/commit")" 1
 

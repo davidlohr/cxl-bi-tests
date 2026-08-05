@@ -5,7 +5,7 @@
 #
 #   - parallel unbind/bind flips of both endpoints (races nr_bi on the
 #     shared RP, cxl_bi_setup/cxl_bi_dealloc, and devres teardown)
-#     under a concurrent bi/cap_bi sysfs reader
+#     under a concurrent back_invalidate/cap_back_invalidate sysfs reader
 #   - region create/commit/destroy churn with per-cycle timing (a
 #     rollback regression that re-polls a failed dport shows up as a
 #     5s+ jump in cycle time)

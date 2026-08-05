@@ -9,7 +9,7 @@
 #   cxl-fmw.1 (targets=cxl.2)                          -> HDM-H window
 #
 # What t14 exercises:
-#   - Multiple root decoders present with distinct cap_bi values (one
+#   - Multiple root decoders present with distinct cap_back_invalidate values (one
 #     1, one 0). The endpoint under RP0 is BI-eligible, the one under
 #     RP1 is HDM-H eligible.
 #   - Both endpoints are hdm-db capable (device-side BI is up for both).

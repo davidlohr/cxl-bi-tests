@@ -32,8 +32,8 @@ trap finish EXIT
 root_decoder_bi() {
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 1 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
 	done
 }
 ep_decoder_for_mem() {
@@ -120,7 +120,7 @@ fi
 delete_regions "$rd"
 region=$(create_region "$rd" "$dec")
 if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null && \
-   [ "$(cat "$CXL/$dec/bi")" = 1 ]; then
+   [ "$(cat "$CXL/$dec/back_invalidate")" = 1 ]; then
 	ok "pre-unbind: committed HDM-DB region, bi=1"
 else
 	fail "pre-unbind: committed HDM-DB region, bi=1"
@@ -188,7 +188,7 @@ if [ -n "$dec2" ]; then
 	region=$(create_region "$rd" "$dec2")
 	if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null; then
 		expect_eq "rebuild: fresh HDM-DB commit, bi=1" \
-			"$(cat "$CXL/$dec2/bi")" 1
+			"$(cat "$CXL/$dec2/back_invalidate")" 1
 	else
 		fail "rebuild: fresh HDM-DB commit, bi=1"
 	fi
@@ -207,8 +207,8 @@ if [ "$NSWITCH" = 2 ] && [ -n "$OUTER" ]; then
 	flag=/tmp/swc-flag.$$
 	touch "$flag"
 	( while [ -e "$flag" ]; do
-		cat $CXL/decoder*/bi $CXL/decoder*/target_type \
-		    $CXL/decoder0.*/cap_bi >/dev/null 2>&1
+		cat $CXL/decoder*/back_invalidate $CXL/decoder*/target_type \
+		    $CXL/decoder0.*/cap_back_invalidate >/dev/null 2>&1
 	  done ) &
 	reader=$!
 	( while [ -e "$flag" ]; do
@@ -233,7 +233,7 @@ if [ "$NSWITCH" = 2 ] && [ -n "$OUTER" ]; then
 	region=$(create_region "$rd" "$dec3")
 	if [ -n "$dec3" ] && [ -n "$region" ] && \
 	   echo 1 > "$CXL/$region/commit" 2>/dev/null && \
-	   [ "$(cat "$CXL/$dec3/bi")" = 1 ]; then
+	   [ "$(cat "$CXL/$dec3/back_invalidate")" = 1 ]; then
 		ok "race: rebuild + commit after storm (bi=1)"
 	else
 		fail "race: rebuild + commit after storm"

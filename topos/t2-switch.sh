@@ -10,8 +10,8 @@
 # What t2 exercises beyond t1:
 #   - The full DSP->USP->RP walk in cxl_bi_setup, including the USP's
 #     optional BI Route Table cap (present here, absent in t6).
-#   - cap_bi is only on root decoder(s); switch decoders should not
-#     have a cap_bi file.
+#   - cap_back_invalidate is only on root decoder(s); switch decoders should not
+#     have a cap_back_invalidate file.
 #   - Phase 2 (driven from run-all.sh) drives an unbind/rebind cycle
 #     to prove the cxl_bi_dealloc/setup lifecycle: post-unbind BI must
 #     be disabled on device and dports, post-rebind it must be back.

@@ -7,7 +7,7 @@
 # Expectations:
 #   - cxl_bi_setup finds the endpoint's BI Decoder capability absent
 #     and returns 0 silently; cxlds->bi stays 0.
-#   - Root decoder's cap_bi=1 (CFMWS carries the flag).
+#   - Root decoder's cap_back_invalidate=1 (CFMWS carries the flag).
 #   - create_ram_region under the BI root produces a DEVMEM region,
 #     but attaching the non-BI endpoint to it fails: cxl_region_attach
 #     rejects with -ENXIO ("BI not enabled on device") because

@@ -12,7 +12,7 @@
 #   - cxl_bi_setup's check loop finds cxl_is_bi_capable() false on the
 #     DSP (no 256B Flit) and returns 0 silently; no dports get BI
 #     enabled and cxlds->bi stays 0.
-#   - Root decoder cap_bi=1 (CFMWS carries the flag).
+#   - Root decoder cap_back_invalidate=1 (CFMWS carries the flag).
 #   - Region attach to a DEVMEM region rejects with -ENXIO.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"

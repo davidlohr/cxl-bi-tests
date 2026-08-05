@@ -42,7 +42,7 @@ mkreg_sn() {
 	echo $sz > "$CXL/$d/dpa_size" || return 1
 	echo "$d" > "$CXL/$r/target0" || return 1
 	echo 1 > "$CXL/$r/commit" || return 1
-	echo "$r bi=$(cat "$CXL/$d/bi")"
+	echo "$r bi=$(cat "$CXL/$d/back_invalidate")"
 }
 
 rmreg_all() {

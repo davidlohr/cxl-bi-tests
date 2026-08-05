@@ -8,7 +8,7 @@
 # Expectations:
 #   - cxl_bi_setup succeeds on the topology and cxlds->bi=1 (the
 #     device path is BI-capable end-to-end).
-#   - Root decoder's cap_bi=0 (CFMWS has no BI flag).
+#   - Root decoder's cap_back_invalidate=0 (CFMWS has no BI flag).
 #   - A ram region created via the root decoder is HOSTONLYMEM, and
 #     endpoint decoder's bi stays 0 after commit.
 #   - Attempting to force the endpoint decoder into an HDM-DB region

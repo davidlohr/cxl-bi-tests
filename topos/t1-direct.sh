@@ -8,7 +8,7 @@
 # What t1 exercises:
 #   - cxl_bi_setup walks the topology: single dport (the RP), the
 #     endpoint's BI Decoder is mapped, cxlds->bi ends up 1.
-#   - Root decoder sysfs advertises cap_bi=1.
+#   - Root decoder sysfs advertises cap_back_invalidate=1.
 #   - A ram region created via the BI-restricted root decoder is a
 #     DEVMEM region; endpoint decoder's bi=1 after commit.
 #   - The RP's nr_bi bumps to 1 across the enable path (verifiable

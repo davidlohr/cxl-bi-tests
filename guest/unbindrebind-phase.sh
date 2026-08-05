@@ -27,8 +27,8 @@ trap finish EXIT
 root_decoder_bi() {
 	local d
 	for d in $CXL/decoder0.*; do
-		[ -e "$d/cap_bi" ] || continue
-		[ "$(cat "$d/cap_bi")" = 1 ] && { basename "$d"; return; }
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
 	done
 }
 ep_decoder_for_mem() {
@@ -72,7 +72,7 @@ region=$(create_region "$rd")
 [ -n "$region" ] || { echo "Bail out! create_region failed"; exit 1; }
 echo 1 > "$CXL/$region/commit" || \
 	{ echo "Bail out! initial commit failed"; exit 1; }
-expect_eq "pre-unbind: endpoint bi=1" "$(cat "$CXL/$dec/bi")" 1
+expect_eq "pre-unbind: endpoint bi=1" "$(cat "$CXL/$dec/back_invalidate")" 1
 
 # Tear the region down before unbind: keeps ordering deterministic.
 echo 0 > "$CXL/$region/commit" 2>/dev/null
@@ -119,7 +119,7 @@ region=$(create_region "$rd")
 [ -n "$region" ] || { fail "post-rebind region create"; exit 1; }
 if echo 1 > "$CXL/$region/commit"; then
 	ok "post-rebind commit succeeded"
-	expect_eq "post-rebind: endpoint bi=1" "$(cat "$CXL/$dec2/bi")" 1
+	expect_eq "post-rebind: endpoint bi=1" "$(cat "$CXL/$dec2/back_invalidate")" 1
 else
 	fail "post-rebind commit"
 fi
@@ -154,7 +154,7 @@ ep=$(endpoint_of_mem "$mem")
 region=$(create_region "$rd")
 if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null && \
    [ -n "$ep" ]; then
-	ok "port-cycle: HDM-DB region up (bi=$(cat "$CXL/$dec/bi"))"
+	ok "port-cycle: HDM-DB region up (bi=$(cat "$CXL/$dec/back_invalidate"))"
 else
 	fail "port-cycle: HDM-DB region up"
 	exit $((FAIL != 0))
@@ -197,7 +197,7 @@ if [ -n "$dec2" ]; then
 	region=$(create_region "$rd")
 	if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null; then
 		expect_eq "port-cycle: post-rebind endpoint bi=1" \
-			"$(cat "$CXL/$dec2/bi")" 1
+			"$(cat "$CXL/$dec2/back_invalidate")" 1
 	else
 		fail "port-cycle: post-rebind commit"
 	fi

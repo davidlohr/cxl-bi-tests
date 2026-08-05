@@ -80,7 +80,7 @@ check_assembled() { # check_assembled <tag>
 	else
 		fail "$1: auto-assembled region committed"
 	fi
-	if [ "$(g cat /sys/bus/cxl/devices/$DEC/bi)" = 1 ]; then
+	if [ "$(g cat /sys/bus/cxl/devices/$DEC/back_invalidate)" = 1 ]; then
 		ok "$1: endpoint bi=1"
 	else
 		fail "$1: endpoint bi=1"
@@ -135,7 +135,7 @@ if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
 else
 	fail "hdm-h: committed decoder enumerated (mode=ram)"
 fi
-if [ "$(g cat /sys/bus/cxl/devices/$DEC/bi)" = 0 ]; then
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/back_invalidate)" = 0 ]; then
 	ok "hdm-h: endpoint bi=0"
 else
 	fail "hdm-h: endpoint bi=0"
@@ -246,19 +246,19 @@ else
 	else
 		fail "combined: two regions assembled (got $nreg)"
 	fi
-	if [ "$(g cat /sys/bus/cxl/devices/$DA/bi)" = 1 ]; then
+	if [ "$(g cat /sys/bus/cxl/devices/$DA/back_invalidate)" = 1 ]; then
 		ok "combined: hdm-db endpoint bi=1"
 	else
 		fail "combined: hdm-db endpoint bi=1"
 	fi
 fi
-if [ "$(g cat /sys/bus/cxl/devices/$DB/bi)" = 0 ]; then
+if [ "$(g cat /sys/bus/cxl/devices/$DB/back_invalidate)" = 0 ]; then
 	ok "combined: hdm-h endpoint bi=0"
 else
 	fail "combined: hdm-h endpoint bi=0"
 fi
 if [ "$(g cat /sys/bus/cxl/devices/$DC/mode)" = ram ] && \
-   [ "$(g cat /sys/bus/cxl/devices/$DC/bi)" = 0 ]; then
+   [ "$(g cat /sys/bus/cxl/devices/$DC/back_invalidate)" = 0 ]; then
 	ok "combined: rejected endpoint survives, bi=0"
 else
 	fail "combined: rejected endpoint survives, bi=0"
@@ -310,8 +310,8 @@ else
 	fi
 	DA=$(dec_of_sn 0x1)
 	DB=$(dec_of_sn 0x2)
-	if [ "$(g cat /sys/bus/cxl/devices/$DA/bi)" = 1 ] && \
-	   [ "$(g cat /sys/bus/cxl/devices/$DB/bi)" = 1 ]; then
+	if [ "$(g cat /sys/bus/cxl/devices/$DA/back_invalidate)" = 1 ] && \
+	   [ "$(g cat /sys/bus/cxl/devices/$DB/back_invalidate)" = 1 ]; then
 		ok "2way: both endpoints bi=1"
 	else
 		fail "2way: both endpoints bi=1"
