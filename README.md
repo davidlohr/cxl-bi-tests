@@ -9,11 +9,12 @@ provisioning and lifetime only: BISnp/BIRsp wire behaviour is out of
 scope (QEMU does not emulate it).
 
 Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
-`x-256b-flit` and `cxl-fmw.N.back-invalidate`.
+`x-256b-flit` and `cxl-fmw.N.back-invalidate`. Suites that need other
+QEMU knobs skip themselves when the binary lacks them.
 
 ## Topologies
 
-Twenty topology scripts under `topos/`, each varying one axis so the
+Twenty-two topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
 | Suite | Topology | What it exercises |
@@ -39,6 +40,7 @@ gate under test is isolated.
 | **t19** | 2-target BI window (window-level interleave), two BI endpoints on separate passthrough HBs | Manual counterpart of t16's committed 2-way set: a sysfs-created 2-way HDM-DB region across a deterministically iw=2 root decoder attaches, commits, reaches `bi=1` on both, and survives a full teardown + re-create cycle. |
 | **t20** | Same shape as t19, second device host-only coherent | Manual interleave across mixed coherency models: the 2-way HDM-DB attach rejects the plain target in both wiring orders (device gates: "BI not enabled on device" / "HDM is host-only coherent"), nothing is left committed, no WARNs. t19 is the paired positive control. |
 | **t21** | Same window pair as t15 (BI + HDM-H) but behind a switch, so the DSP commit machinery is in the path | BOTH-coherency fallback: with BI setup failed at boot (a qemu whose BI commit latches past the advertised 2s timeout), an HDM-DB attach fails closed ("BI not enabled on device") while a host-only region still creates, commits and tears down on the same endpoint decoder with `bi=0` and the default `expander` target_type throughout. SKIPs on stock QEMU, where BI setup succeeds. |
+| **t22** | Endpoint reporting Unknown in Supported Coherency Models (`x-coherency-unknown=on`), BI CFMWS | The only topology whose device does not name the coherency models it supports. Table 8-116 permits 00b, which says nothing about whether Target Range Type is writable, so the kernel does not refuse it: the decoder defaults to `expander`, inherits `accelerator` on attach to an HDM-DB region with `cxlds->bi` as the gate, commits with `bi=1`, and reverts on destroy. SKIPs when QEMU lacks the knob. |
 
 ## Configuration
 

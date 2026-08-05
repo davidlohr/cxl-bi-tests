@@ -1161,6 +1161,43 @@ t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
 		no_type_mismatch_warn
 	fi
 	;;
+
+# --------------------------------------------------------------- t22
+t22)	# BI device reporting Unknown coherency models. The kernel must
+	# still enable BI and let the decoder inherit device-coherent
+	# when it joins an HDM-DB region: Unknown says nothing about
+	# whether Target Range Type is writable, so refusing it would
+	# also exclude devices that support both models silently.
+	check_cap_bi_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	mem=$(all_mems | head -1)
+	dec=$(ep_decoder_for_mem "$mem")
+	[ -n "$dec" ] || { fail "no endpoint decoder for $mem"; exit 1; }
+
+	# Pre-region state: the default is host-only, as for any Type 3
+	# decoder that does not report device-coherent only.
+	expect_eq "decoder defaults to expander" \
+		"$(endpoint_decoder_target_type "$dec")" expander
+	expect_eq "endpoint bi=0 before attach" "$(cat "$CXL/$dec/bi")" 0
+	no_setup_failure
+
+	region=$(create_region "$rd" 1 256 "$mem")
+	[ -n "$region" ] && ok "HDM-DB region create (Unknown coherency)" \
+		|| { fail "HDM-DB region create (Unknown coherency)"; exit 1; }
+	# The inheritance under test: host-only default -> device-coherent.
+	expect_eq "decoder inherits accelerator on attach" \
+		"$(endpoint_decoder_target_type "$dec")" accelerator
+	expect_eq "endpoint bi=1 on attach" "$(cat "$CXL/$dec/bi")" 1
+	check "HDM-DB commit (Unknown coherency)" commit_region "$region"
+	expect_eq "endpoint bi=1 committed" "$(cat "$CXL/$dec/bi")" 1
+
+	destroy_region "$region" "$rd"
+	expect_eq "decoder back to expander after destroy" \
+		"$(endpoint_decoder_target_type "$dec")" expander
+	no_type_mismatch_warn
+	;;
 esac
 
 exit $((FAIL != 0))
