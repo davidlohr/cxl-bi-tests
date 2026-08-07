@@ -98,6 +98,33 @@ else
 	ok "dmesg: BI unbind message optional"
 fi
 
+# RP (0000:0c:00.0) BI Decoder ctrl via /dev/mem: BAR0 + 0x1000
+# (cachemem) + 0xab8. Empty output = readback unavailable (e.g.
+# CONFIG_IO_STRICT_DEVMEM); callers SKIP then.
+rp_bi_ctrl() {
+	python3 - <<'PYEOF' 2>/dev/null
+import ctypes, mmap, os
+base = int(open("/sys/bus/pci/devices/0000:0c:00.0/resource")
+           .readline().split()[0], 16)
+fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+reg = ctypes.c_uint32.from_buffer(m, 0xab8)
+print(hex(reg.value))
+del reg
+m.close(); os.close(fd)
+PYEOF
+}
+
+# Dealloc step 6 clear-at-zero: the last (only) BI holder went away,
+# so the RP BI Decoder ctrl register must read back all-clear.
+rpctl=$(rp_bi_ctrl)
+if [ -z "$rpctl" ]; then
+	ok "post-unbind: RP BI ctrl cleared # SKIP no /dev/mem MMIO"
+else
+	expect_eq "post-unbind: RP BI ctrl cleared (dealloc step 6)" \
+		"$rpctl" 0x0
+fi
+
 # Rebind: bring cxl_pci back which triggers cxl_mem_probe again.
 echo "$bdf" > /sys/bus/pci/drivers/cxl_pci/bind 2>/dev/null || \
 	echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
@@ -108,6 +135,15 @@ for i in $(seq 1 60); do
 	[ -n "$dec2" ] && break
 	sleep 0.5
 done
+
+# Rebind re-runs cxl_bi_setup: the RP above the switch must be back
+# to Forward-only (Table 8-157 / 9.14.2 allocate step 6).
+rpctl=$(rp_bi_ctrl)
+if [ -z "$rpctl" ]; then
+	ok "post-rebind: RP BI Forward restored # SKIP no /dev/mem MMIO"
+else
+	expect_eq "post-rebind: RP BI Forward restored" "$rpctl" 0x1
+fi
 if [ -z "$dec2" ]; then
 	fail "endpoint decoder returned after rebind"
 	exit $((FAIL != 0))
