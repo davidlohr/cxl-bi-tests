@@ -9,15 +9,21 @@
 #             cxl-downstream (dsp1, flit)
 #               cxl-type3 (mem0, hdm-db, flit)
 #
-# What t9 exercises beyond t2:
-#   - cxl_bi_setup walks two switch pairs (inner DSP + inner USP,
-#     outer DSP + outer USP), then the RP. Every cxl_is_bi_capable()
-#     check must pass and every dport's BI enable must commit.
-#   - Cascaded USPs each map a BI RT (or tolerate the absence, per
-#     8.2.4.26). Neither should be missed on rollback if enable fails.
-#   - No CXL 4.0 spec text explicitly covers cascaded switches for BI.
-#     Current kernel behaviour is "walk everything, enable every dport
-#     in the chain"; this suite makes any regression on that visible.
+# Two CFMWS windows over the same host bridge: fmw.0 carries the BI
+# restriction, fmw.1 is plain HDM-H.
+#
+# BI is a single-switch-level feature: a transit DSP would stamp its
+# own Secondary Bus Number over the originating BI-ID (Table 9-13),
+# so cxl_bi_probe_capable() refuses this topology outright. t9
+# verifies:
+#   - The refusal: bi_capable stays 0, "cascaded switches unsupported"
+#     in dmesg, the BI window rejects the endpoint at attach ("BI not
+#     enabled on device"), and the endpoint itself survives.
+#   - Everything but BI works across the cascade: an HDM-H region on
+#     fmw.1 creates and commits through both switches.
+#   - Port lifecycle (phase 2): outer-port unbind tears the subtree
+#     down, the emptied outer port is reaped, rebind rebuilds the
+#     cascade, and the refusal re-fires on re-probe.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 
@@ -30,4 +36,5 @@ launch_qemu \
 	-device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
 	-device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on \
 	-device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
-	-M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	-M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on,\
+cxl-fmw.1.targets.0=cxl.1,cxl-fmw.1.size=4G,cxl-fmw.1.interleave-granularity=4k

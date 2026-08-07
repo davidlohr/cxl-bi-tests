@@ -1,19 +1,17 @@
 #!/bin/bash
 # t9 phase 2: mid-level switch port unbind cascade.
 #
-# Ports created by endpoint enumeration are devres-hosted on their
-# parent port, so unbinding the *outer* switch port's cxl_port driver
-# must tear down the child subtree first (inner port, endpoint port,
-# region) and free the outer port's dports last. cxl_bi_dealloc's
-# dport-disable walk therefore runs while every ancestor mapping is
-# still live; a LIFO ordering regression is a use-after-free in that
-# walk. Once the cascaded memdev detach runs cxl_detach_ep, the outer
+# BI is refused on this topology (single-switch-level scope), so the
+# phase exercises the port lifecycle without BI: unbinding the *outer*
+# switch port's cxl_port driver must tear down the child subtree first
+# (inner port, endpoint port, region) and free the outer port's dports
+# last. Once the cascaded memdev detach runs cxl_detach_ep, the outer
 # port is empty and driverless and gets reaped outright; a cxl_mem
 # rebind then re-enumerates the whole cascade (fresh port numbers,
-# re-probed dports, re-mapped BI RT) and a new HDM-DB region must
-# commit. A second cycle fires the unbind under region create/commit
-# churn plus a decoder-attribute reader to race the cascade against
-# an in-flight cxl_bi_setup walk.
+# re-probed dports), the capability probe refuses BI again, and a new
+# HDM-H region must commit. A second cycle fires the unbind under
+# region create/commit churn plus a decoder-attribute reader to race
+# the cascade against in-flight attribute reads.
 #
 # Output: TAP-ish, exit 0 iff all checks pass.
 set -o pipefail
@@ -29,11 +27,11 @@ expect_eq() {
 finish() { echo "1..$N"; echo "# passed: $PASS  failed: $FAIL"; }
 trap finish EXIT
 
-root_decoder_bi() {
+root_decoder_nobi() {
 	local d
 	for d in $CXL/decoder0.*; do
 		[ -e "$d/cap_back_invalidate" ] || continue
-		[ "$(cat "$d/cap_back_invalidate")" = 1 ] && { basename "$d"; return; }
+		[ "$(cat "$d/cap_back_invalidate")" = 0 ] && { basename "$d"; return; }
 	done
 }
 ep_decoder_for_mem() {
@@ -102,7 +100,7 @@ rebind_and_wait() { # <mem>  -> echoes fresh decoder, empty on timeout
 
 echo "# t9 phase 2: switch-unbind cascade"
 
-rd=$(root_decoder_bi)
+rd=$(root_decoder_nobi)
 mem=$(first_mem)
 dec=$(ep_decoder_for_mem "$mem")
 ep=$(dirname "$(readlink -f "$CXL/$dec")"); ep=$(basename "$ep")
@@ -120,10 +118,10 @@ fi
 delete_regions "$rd"
 region=$(create_region "$rd" "$dec")
 if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null && \
-   [ "$(cat "$CXL/$dec/back_invalidate")" = 1 ]; then
-	ok "pre-unbind: committed HDM-DB region, bi=1"
+   [ "$(cat "$CXL/$dec/back_invalidate")" = 0 ]; then
+	ok "pre-unbind: committed HDM-H region, bi=0"
 else
-	fail "pre-unbind: committed HDM-DB region, bi=1"
+	fail "pre-unbind: committed HDM-H region, bi=0"
 	echo "Bail out! baseline broken"; exit 1
 fi
 
@@ -143,10 +141,11 @@ done
 # The region device survives target loss; it must be decommitted.
 expect_eq "cascade: region decommitted" \
 	"$(cat "$CXL/$region/commit" 2>/dev/null)" 0
-if dmesg | grep -q "BI requests disabled"; then
-	ok "cascade: BI disabled during teardown"
+# BI was refused at probe, so the teardown must not touch it either.
+if dmesg | grep -q "BI requests"; then
+	fail "cascade: no BI enable/disable on refused topology"
 else
-	fail "cascade: BI disabled during teardown"
+	ok "cascade: no BI enable/disable on refused topology"
 fi
 
 # The memdev detach is a workqueue item; the same pass runs
@@ -165,15 +164,6 @@ done
 [ ! -d "$CXL/$OUTER" ] && ok "cascade: empty outer port reaped" \
 	|| fail "cascade: empty outer port reaped"
 
-# LIFO proof in the log: the dealloc walk's disable precedes the
-# memdev disconnect from the surviving ancestors.
-dis=$(dmesg | grep -n "BI requests disabled" | head -1 | cut -d: -f1)
-dc=$(dmesg | grep -n "disconnect" | head -1 | cut -d: -f1)
-if [ -n "$dis" ] && [ -n "$dc" ] && [ "$dis" -lt "$dc" ]; then
-	ok "cascade: BI disable precedes memdev disconnect"
-else
-	fail "cascade: BI disable precedes memdev disconnect (dis=$dis dc=$dc)"
-fi
 dmesg | grep -q "BI setup failed" && fail "cascade: no 'BI setup failed'" \
 	|| ok "cascade: no 'BI setup failed'"
 
@@ -185,12 +175,19 @@ dmesg | grep -q "BI setup failed" && fail "cascade: no 'BI setup failed'" \
 dec2=$(rebind_and_wait "$mem")
 if [ -n "$dec2" ]; then
 	ok "rebuild: endpoint decoder back after rebind ($dec2)"
+	# The capability probe re-ran on rebind and refused again
+	# (dmesg was cleared before the unbind).
+	if dmesg | grep -q "cascaded switches unsupported"; then
+		ok "rebuild: cascade refused again on re-probe"
+	else
+		fail "rebuild: cascade refused again on re-probe"
+	fi
 	region=$(create_region "$rd" "$dec2")
 	if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null; then
-		expect_eq "rebuild: fresh HDM-DB commit, bi=1" \
-			"$(cat "$CXL/$dec2/back_invalidate")" 1
+		expect_eq "rebuild: fresh HDM-H commit, bi=0" \
+			"$(cat "$CXL/$dec2/back_invalidate")" 0
 	else
-		fail "rebuild: fresh HDM-DB commit, bi=1"
+		fail "rebuild: fresh HDM-H commit, bi=0"
 	fi
 	delete_regions "$rd"
 else
@@ -233,8 +230,8 @@ if [ "$NSWITCH" = 2 ] && [ -n "$OUTER" ]; then
 	region=$(create_region "$rd" "$dec3")
 	if [ -n "$dec3" ] && [ -n "$region" ] && \
 	   echo 1 > "$CXL/$region/commit" 2>/dev/null && \
-	   [ "$(cat "$CXL/$dec3/back_invalidate")" = 1 ]; then
-		ok "race: rebuild + commit after storm (bi=1)"
+	   [ "$(cat "$CXL/$dec3/back_invalidate")" = 0 ]; then
+		ok "race: rebuild + commit after storm (bi=0)"
 	else
 		fail "race: rebuild + commit after storm"
 	fi

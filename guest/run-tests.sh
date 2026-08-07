@@ -6,8 +6,10 @@
 #  - Register probing: BI Decoder / BI Route Table caps map inside the
 #    dport devres group so a hot-remove/hot-add cycle is clean.
 #  - Topology walk: cxl_bi_setup enables BI on every dport in the path
-#    device -> DSP -> USP -> RP; failure rolls back only the dports
-#    that fully enabled, skipping the failed one.
+#    device -> DSP -> USP -> RP (Enable on the device-adjacent dport,
+#    Forward on a transit RP); failure rolls back only the dports that
+#    fully enabled, skipping the failed one. Cascaded switches are
+#    refused at the capability probe.
 #  - HDM decoder init: cxl_hdm_decoder->supported_coherency drives the
 #    endpoint decoder's default target_type; a decoder already
 #    committed with the HDM BI bit set is rejected (-ENXIO).
@@ -571,7 +573,8 @@ t8)	# DSP not in 256B Flit mode. BI walk's DSP check fails, cxlds->bi=0.
 	;;
 
 # ---------------------------------------------------------------- t9
-t9)	# cascaded switches: cxl_bi_setup walks two switch pairs.
+t9)	# cascaded switches: BI refused at the capability probe, the
+	# rest of the topology stays fully functional.
 	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	# Expect at least two non-root cxl_port entries (outer + inner switch).
@@ -582,18 +585,45 @@ t9)	# cascaded switches: cxl_bi_setup walks two switch pairs.
 		fail "cascaded switches ($nports cxl_port(s), want >=2)"
 	fi
 
+	if dmesg_saw "cascaded switches unsupported"; then
+		ok "cascade refused at capability probe"
+	else
+		fail "cascade refused at capability probe"
+	fi
+
 	rd=$(root_decoder_bi)
-	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	rd_h=$(root_decoder_nobi)
+	[ -n "$rd" ]   || { fail "no BI root decoder"; exit 1; }
+	[ -n "$rd_h" ] || { fail "no HDM-H root decoder"; exit 1; }
 	mem=$(all_mems | head -1)
 	dec=$(ep_decoder_for_mem "$mem")
 
+	# The BI window must refuse the endpoint at attach.
 	region=$(create_region "$rd" 1 256 "$mem")
-	[ -n "$region" ] && ok "create HDM-DB region (cascaded)" \
-		|| { fail "create HDM-DB region"; exit 1; }
-	check "commit HDM-DB region across cascade" commit_region "$region"
-	expect_eq "endpoint bi=1 (cascaded)" "$(cat "$CXL/$dec/back_invalidate")" 1
+	if [ -z "$region" ]; then
+		ok "HDM-DB region refused (cascaded path)"
+	else
+		fail "HDM-DB region refused (cascaded path)"
+		destroy_region "$region" "$rd"
+	fi
+	dmesg_saw "BI not enabled on device" && \
+		ok "refusal diagnosed in dmesg" || \
+		fail "refusal diagnosed in dmesg"
+	expect_eq "endpoint bi=0 (cascade)" \
+		"$(cat "$CXL/$dec/back_invalidate")" 0
+	# The refused attempt leaves an empty region device behind.
+	orph=$(ls $CXL 2>/dev/null | grep '^region' | head -1)
+	[ -n "$orph" ] && destroy_region "$orph" "$rd"
+
+	# HDM-H still assembles and commits across both switches.
+	region=$(create_region "$rd_h" 1 256 "$mem")
+	[ -n "$region" ] && ok "create HDM-H region (cascaded)" \
+		|| { fail "create HDM-H region"; exit 1; }
+	check "commit HDM-H region across cascade" commit_region "$region"
+	expect_eq "endpoint bi=0 post-commit" \
+		"$(cat "$CXL/$dec/back_invalidate")" 0
 	no_setup_failure
-	destroy_region "$region"
+	destroy_region "$region" "$rd_h"
 	;;
 
 # --------------------------------------------------------------- t10
