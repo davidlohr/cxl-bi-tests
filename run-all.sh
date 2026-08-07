@@ -95,6 +95,16 @@ run_suite() { # run_suite <topo-script> <suite>
 	fi
 
 	[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+
+	# The qemu BI oracle (-d guest_errors, Table 8-157 messages) must
+	# stay silent across the whole suite, phases included: it flags
+	# any RP/DSP BI Decoder programming that contradicts the topology.
+	if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" != 0 ]
+	then
+		echo "qemu BI oracle flagged mis-programming:"
+		grep "Table 8-157" "$RUNDIR/qemu.log"
+		TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
 	stop_qemu
 }
 

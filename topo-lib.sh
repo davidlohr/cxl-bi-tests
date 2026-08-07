@@ -31,11 +31,12 @@ $EXTRA_APPEND"
 # Boots in background; console to $CONSOLE_LOG, qmp on $QMPSOCK.
 launch_qemu() {
 	stop_qemu
-	rm -f "$CONSOLE_LOG"
+	rm -f "$CONSOLE_LOG" "$RUNDIR/qemu.log"
 	"$QEMU" -smp 4 -m 4G -cpu host \
 		-drive file="$IMG" \
 		-kernel "$KERNEL" \
 		-append "$BOOTARGS" \
+		-d guest_errors -D "$RUNDIR/qemu.log" \
 		-machine q35,accel=kvm,cxl=on \
 		-device e1000,netdev=net0 \
 		-netdev user,id=net0,hostfwd=tcp:127.0.0.1:$SSHPORT-:22 \
