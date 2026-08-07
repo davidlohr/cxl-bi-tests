@@ -404,7 +404,7 @@ else
 fi
 if assembly_gap; then
 	skip "mixed: mismatch reject diagnostic (kernel lacks passthrough assembly)"
-elif [ "$(g dmesg | grep -cE 'coherency model mismatch|mismatch decoder type|BI not enabled on device')" -gt 0 ]; then
+elif [ "$(g dmesg | grep -cE 'coherency model mismatch|mismatch decoder type|BI not enabled on device|host-only decoder in a device-coherent window')" -gt 0 ]; then
 	ok "mixed: mismatch rejected with a diagnostic"
 else
 	fail "mixed: mismatch rejected with a diagnostic"
