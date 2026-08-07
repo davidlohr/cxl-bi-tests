@@ -105,7 +105,57 @@ if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
 else
 	fail "bi: committed decoder enumerated (mode=ram)"
 fi
+# Direct attach: the RP must terminate BI (BI Enable), not forward
+# (Table 8-157). Asserted twice: the kernel's decision via dmesg, and
+# the programmed register via the qemu -d guest_errors oracle, which
+# flags any RP BI programming that contradicts the topology.
+if dmesg_has "RP BI enable (direct attach)"; then
+	ok "bi: RP programmed BI Enable (direct attach)"
+else
+	fail "bi: RP programmed BI Enable (direct attach)"
+fi
+if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+	ok "bi: qemu RP BI oracle silent"
+else
+	fail "bi: qemu RP BI oracle silent"
+fi
 check_assembled "bi"
+# Oracle self-test: mis-program the RP BI decoder from the guest
+# (BI FW + BI Enable together, illegal per Table 8-157) and expect
+# the oracle to flag it; restore the good value after. The RP's
+# component block is BAR0, cachemem at +0x1000, BI decoder ctrl at
+# +0xab8 (dmesg: "found BI Decoder capability (0xab4)" + 4). Skipped
+# unless the readback shows the expected BI Enable-only value, and
+# needs /dev/mem MMIO access (!CONFIG_IO_STRICT_DEVMEM). Gate on
+# x-bi-commit-fault as the oracle's generation marker: a qemu without
+# it predates the BI oracle and can never flag the poke.
+if ! "$QEMU" -device cxl-downstream,help 2>/dev/null | \
+		grep -q "x-bi-commit-fault"; then
+	skip "bi: oracle fires on illegal RP program (qemu lacks BI oracle)"
+else
+	RPCTL=$(g 'python3 - <<PYEOF
+import ctypes, mmap, os
+base = int(open("/sys/bus/pci/devices/0000:0c:00.0/resource")
+           .readline().split()[0], 16)
+fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+reg = ctypes.c_uint32.from_buffer(m, 0xab8)
+v = reg.value
+print(hex(v))
+if v == 0x2:
+    reg.value = 0x3
+    reg.value = 0x2
+del reg
+m.close(); os.close(fd)
+PYEOF' 2>/dev/null)
+	if [ "$RPCTL" != 0x2 ]; then
+		skip "bi: oracle fires on illegal RP program (ctrl readback ${RPCTL:-none})"
+	elif sleep 1; [ "$(grep -c "both set" "$RUNDIR/qemu.log" 2>/dev/null)" -gt 0 ]; then
+		ok "bi: oracle fires on illegal RP program"
+	else
+		fail "bi: oracle fires on illegal RP program"
+	fi
+fi
 g dmesg > "$OUT/t16.dmesg" 2>/dev/null
 
 # --- scenario 2: re-adoption across guest reboot ----------------------
