@@ -8,6 +8,42 @@ OUT=${OUT:-$RUNDIR/results}
 mkdir -p "$OUT"
 TOTAL_FAIL=0
 
+# tap_fold_fail <tapfile> <description> [diag-file]
+# Merge a host-discovered failure into a TAP file the guest already
+# closed: append the test, renumber the plan, and fix the summary so
+# the file cannot claim "failed: 0" while the host found a problem.
+# Left alone if the plan is missing or a SKIP (nothing ran).
+tap_fold_fail() {
+	local tap=$1 desc=$2 diag=$3
+
+	[ -f "$tap" ] || return 0
+	if ! grep -q '^1\.\.[0-9]\+$' "$tap"; then
+		{ echo "not ok - $desc"
+		  [ -n "$diag" ] && sed 's/^/# /' "$diag"; } >> "$tap"
+		return 0
+	fi
+	awk -v desc="$desc" -v diag="$diag" '
+		/^1\.\.[0-9]+$/    { n = substr($0, 4) + 0; next }
+		/^# passed: .* failed: / { pass = $3; fail = $5; next }
+		{ print }
+		END {
+			printf "not ok %d - %s\n", n + 1, desc
+			while (diag != "" && (getline l < diag) > 0)
+				printf "# %s\n", l
+			printf "1..%d\n", n + 1
+			printf "# passed: %d  failed: %d\n", pass, fail + 1
+		}' "$tap" > "$tap.tmp" && mv "$tap.tmp" "$tap"
+}
+
+# tap_verdict <tapfile>
+# Echo a suite's final plan and summary. Called once the host-side
+# checks have been folded in: the guest writes its own trailer before
+# any of them run, so streaming that live reports "failed: 0" for a
+# suite the host is about to fail.
+tap_verdict() {
+	[ -f "$1" ] && grep -E '^1\.\.|^# passed: ' "$1" | tail -2
+}
+
 run_suite() { # run_suite <topo-script> <suite>
 	local topo=$1 suite=$2
 	echo "=== $suite ($(basename "$topo")) ==="
@@ -30,8 +66,10 @@ run_suite() { # run_suite <topo-script> <suite>
 	# Do NOT dmesg -C here: the driver's bi_setup_succeeded / boot-state
 	# checks want the cxl_bi_setup traces from the initial cxl_mem probe.
 	# Phase-2 scripts clear dmesg themselves when they need a fresh view.
-	guest_ssh "bash /tmp/run-tests.sh $suite" \
-		| tee "$OUT/$suite.tap"
+	# The guest's trailer is kept out of the live stream and replayed
+	# by tap_verdict below, once host-side checks have been folded in.
+	guest_ssh "bash /tmp/run-tests.sh $suite" | tee "$OUT/$suite.tap" \
+		| grep --line-buffered -Ev '^1\.\.|^# passed: '
 	local rc=${PIPESTATUS[0]}
 	guest_ssh "dmesg" > "$OUT/$suite.dmesg" 2>/dev/null
 
@@ -96,15 +134,24 @@ run_suite() { # run_suite <topo-script> <suite>
 
 	[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 
-	# The qemu BI oracle (-d guest_errors, Table 8-157 messages) must
-	# stay silent across the whole suite, phases included: it flags
-	# any RP/DSP BI Decoder programming that contradicts the topology.
-	if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" != 0 ]
+	# The qemu BI oracle (-d guest_errors, "CXL BI oracle" messages)
+	# must stay silent across the whole suite, phases included: it
+	# flags any RP/DSP BI Decoder programming that contradicts the
+	# topology.
+	# The guest writes its plan and summary inside the guest, where
+	# host-side findings are invisible, so the result is folded into
+	# the suite's TAP - otherwise the file reads "failed: 0" while
+	# the oracle is flagging a real mis-programming.
+	if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" != 0 ]
 	then
 		echo "qemu BI oracle flagged mis-programming:"
-		grep "Table 8-157" "$RUNDIR/qemu.log"
+		grep "CXL BI oracle" "$RUNDIR/qemu.log"
+		grep "CXL BI oracle" "$RUNDIR/qemu.log" > "$RUNDIR/oracle.diag"
+		tap_fold_fail "$OUT/$suite.tap" "qemu BI oracle silent" \
+			      "$RUNDIR/oracle.diag"
 		TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
+	tap_verdict "$OUT/$suite.tap"
 	stop_qemu
 }
 
