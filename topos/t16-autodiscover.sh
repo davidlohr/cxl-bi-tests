@@ -222,7 +222,38 @@ else
 	fail "neg: endpoint survives (adopt-then-gate layering)"
 fi
 
-# --- scenario 5: combined 3-HB machine (per-device independence) ------
+# --- scenario 5: host-only decoder under a BI window ------------------
+# The inverse of scenario 4: a committed HDM-H decoder whose HPA lands
+# in a BI window. cxl_acpi_cfmws_verify() refuses a CFMWS that
+# declares both Host-only Coherent and BI, so a BI window is never
+# also a host-only one and the decoder's model is not what the window
+# is for. Deliberately a lone device: with a BI peer present the peer
+# constructs the region first and the reject arrives from the attach
+# path instead of construct_region().
+launch_t16 ",x-committed=hdm-h" ",cxl-fmw.0.back-invalidate=on" || \
+	{ fail "hostonly-bi: qemu launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "hostonly-bi: guest booted (HDM-H decoder, BI window)"
+else
+	fail "hostonly-bi: guest booted (HDM-H decoder, BI window)"; exit 1
+fi
+if dmesg_has "coherency model not permitted by the window"; then
+	ok "hostonly-bi: rejected per 9.18.1.3 Window Restrictions"
+else
+	fail "hostonly-bi: rejected per 9.18.1.3 Window Restrictions"
+fi
+if [ "$(g ls /sys/bus/cxl/devices/ | grep -c '^region0$')" -gt 0 ]; then
+	fail "hostonly-bi: no region assembled"
+else
+	ok "hostonly-bi: no region assembled"
+fi
+if [ "$(g cat /sys/bus/cxl/devices/$DEC/mode)" = ram ]; then
+	ok "hostonly-bi: endpoint survives"
+else
+	fail "hostonly-bi: endpoint survives"
+fi
+
+# --- scenario 6: combined 3-HB machine (per-device independence) ------
 # One boot, three single-RP host bridges: hdm-db in a BI window
 # (adopts + assembles), hdm-h in a plain window (control), hdm-db in a
 # plain window (rejected). Exercises x-committed window auto-selection
@@ -314,7 +345,7 @@ else
 	fail "combined: rejected endpoint survives, bi=0"
 fi
 
-# --- scenario 6: committed 2-way HDM-DB interleave (control) ----------
+# --- scenario 7: committed 2-way HDM-DB interleave (control) ----------
 # One BI window targeting two passthrough HBs, both devices committing
 # decoder 0 as members of the same 2-way set (x-committed-ways=2, the
 # endpoint stride mirrors the window's routing). The set must
@@ -368,7 +399,7 @@ else
 	fi
 fi
 
-# --- scenario 7: mixed-coherency 2-way set must not assemble ----------
+# --- scenario 8: mixed-coherency 2-way set must not assemble ----------
 # Same window, same set, but the second member commits host-only
 # (x-committed=hdm-h): a committed-BI decoder and a committed HDM-H
 # decoder describing one interleave set. Whatever the construct order,
