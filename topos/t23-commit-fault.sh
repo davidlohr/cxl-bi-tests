@@ -123,7 +123,63 @@ fi
 check_refused "rt-tmo" "BI-ID commit timed out"
 g dmesg > "$OUT/t23-rt-tmo.dmesg" 2>/dev/null
 
-# --- scenario 5: dealloc-time DSP commit error (dealloc step 4d) ------
+# --- scenario 5: firmware-committed DSP, uncommitted route table -----
+# x-bi-committed presents a DSP that firmware already programmed and
+# committed (9.14.2 allocate steps 3-4). The kernel may adopt it, but
+# the switch's route table carries its own commit (Table 8-152) that
+# the DSP's Committed bit says nothing about. Left uncommitted here,
+# so an adopt that trusts the DSP alone leaves BI-ID routing
+# unactivated - readable as BI RT Status.Committed still 0.
+if ! "$QEMU" -device cxl-downstream,help 2>/dev/null | \
+		grep -q "x-bi-committed"; then
+	skip "adopt-rt: qemu lacks x-bi-committed"
+	skip "adopt-rt: BI enabled through the adopted path"
+else
+	launch_t23 ",x-bi-committed=on" "" || { fail "adopt-rt: launch"; exit 1; }
+	if ! wait_for_guest 180; then
+		fail "adopt-rt: guest booted"; exit 1
+	fi
+	# The USP's component block is BAR0, cachemem at +0x1000; take the
+	# BI RT capability offset from the probe log rather than hardcode
+	# it, and read Committed (bit 0) from status at +8.
+	rt_off=$(g dmesg | grep -m1 -oE 'found BI RT capability \(0x[0-9a-f]+\)' \
+		 | grep -oE '0x[0-9a-f]+')
+	# The uport link resolves to a path containing every BDF on the
+	# way down, so take the leaf rather than the first match - the
+	# first is the root port, whose BAR has no route table.
+	usp_bdf=$(g 'for p in /sys/bus/cxl/devices/port*; do
+			b=$(basename "$(readlink -f $p/uport)")
+			case $b in *:*:*.*) echo "$b";; esac
+		done' | head -1)
+	if [ -z "$rt_off" ] || [ -z "$usp_bdf" ]; then
+		skip "adopt-rt: BI RT committed by the kernel (no RT/USP found)"
+	else
+		rtsts=$(g "python3 - <<PYEOF
+import ctypes, mmap, os
+base = int(open('/sys/bus/pci/devices/$usp_bdf/resource')
+           .readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+print(hex(ctypes.c_uint32.from_buffer(m, $rt_off + 8).value))
+m.close(); os.close(fd)
+PYEOF" 2>/dev/null)
+		if [ -z "$rtsts" ]; then
+			skip "adopt-rt: BI RT committed by the kernel (no /dev/mem)"
+		elif [ $(( rtsts & 1 )) = 1 ]; then
+			ok "adopt-rt: BI RT committed by the kernel"
+		else
+			fail "adopt-rt: BI RT committed by the kernel (sts=$rtsts)"
+		fi
+	fi
+	if dmesg_has "BI requests enabled" && ! dmesg_has "BI setup failed"; then
+		ok "adopt-rt: BI enabled through the adopted path"
+	else
+		fail "adopt-rt: BI enabled through the adopted path"
+	fi
+	g dmesg > "$OUT/t23-adopt-rt.dmesg" 2>/dev/null
+fi
+
+# --- scenario 6: dealloc-time DSP commit error (dealloc step 4d) ------
 # x-bi-commit-fault-after=1 lets the allocate-time commit succeed and
 # fails the next one, which is the deallocation commit issued by the
 # cxl_mem unbind. The dealloc path is best-effort: it must log the
