@@ -114,7 +114,7 @@ if dmesg_has "RP BI enable (direct attach)"; then
 else
 	fail "bi: RP programmed BI Enable (direct attach)"
 fi
-if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
 	ok "bi: qemu RP BI oracle silent"
 else
 	fail "bi: qemu RP BI oracle silent"
@@ -206,7 +206,7 @@ if wait_for_guest 180; then
 else
 	fail "neg: guest booted (BI decoder, non-BI window)"; exit 1
 fi
-if dmesg_has "BI decoder in a non-BI window"; then
+if dmesg_has "coherency model not permitted by the window"; then
 	ok "neg: rejected per 9.18.1.3 Window Restrictions"
 else
 	fail "neg: rejected per 9.18.1.3 Window Restrictions"
@@ -280,7 +280,7 @@ if [ "$nadopt" = 2 ]; then
 else
 	fail "combined: both hdm-db devices adopted (got $nadopt, want 2)"
 fi
-nrej=$(g dmesg | grep -c "BI decoder in a non-BI window")
+nrej=$(g dmesg | grep -c "coherency model not permitted by the window")
 if [ "$nrej" = 1 ]; then
 	ok "combined: exactly one non-BI-window reject"
 else
@@ -404,7 +404,7 @@ else
 fi
 if assembly_gap; then
 	skip "mixed: mismatch reject diagnostic (kernel lacks passthrough assembly)"
-elif [ "$(g dmesg | grep -cE 'coherency model mismatch|mismatch decoder type|BI not enabled on device|host-only decoder in a device-coherent window')" -gt 0 ]; then
+elif [ "$(g dmesg | grep -cE 'coherency model mismatch|mismatch decoder type|BI not enabled on device|coherency model not permitted by the window')" -gt 0 ]; then
 	ok "mixed: mismatch rejected with a diagnostic"
 else
 	fail "mixed: mismatch rejected with a diagnostic"

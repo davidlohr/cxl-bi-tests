@@ -74,7 +74,7 @@ check_refused() {
 	else
 		fail "$1: endpoint survives"
 	fi
-	if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+	if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
 		ok "$1: qemu BI oracle silent"
 	else
 		fail "$1: qemu BI oracle silent"
@@ -168,7 +168,7 @@ if [ "$(g ls /sys/bus/cxl/devices/ | grep -c '^endpoint')" = 0 ]; then
 else
 	fail "dealloc-err: endpoint torn down despite commit error"
 fi
-if [ "$(grep -c "Table 8-157" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
 	ok "dealloc-err: qemu BI oracle silent"
 else
 	fail "dealloc-err: qemu BI oracle silent"
