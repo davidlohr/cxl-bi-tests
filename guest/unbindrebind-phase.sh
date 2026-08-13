@@ -50,6 +50,9 @@ mem=$(first_mem)
 dec=$(ep_decoder_for_mem "$mem")
 [ -n "$rd" ] && [ -n "$mem" ] && [ -n "$dec" ] || \
 	{ echo "Bail out! prereq missing"; exit 1; }
+# RP BDF for the post-unbind/rebind readbacks, captured while the
+# endpoint's sysfs path still exists.
+rpbdf=$(readlink -f "$CXL/$mem" | awk -F/ '{print $(NF-4)}')
 
 # Build a HDM-DB region and commit it. bi should end up 1.
 create_region() {
@@ -98,19 +101,24 @@ else
 	ok "dmesg: BI unbind message optional"
 fi
 
-# RP (0000:0c:00.0) BI Decoder ctrl via /dev/mem: BAR0 + 0x1000
-# (cachemem) + 0xab8. Empty output = readback unavailable (e.g.
-# CONFIG_IO_STRICT_DEVMEM); callers SKIP then.
+# RP BI Decoder ctrl via /dev/mem: BAR0 + 0x1000 (cachemem), the
+# BI Decoder capability (ID 0xC) located through the cap array
+# rather than a hardcoded offset. Empty output = readback
+# unavailable (e.g. CONFIG_IO_STRICT_DEVMEM); callers SKIP then.
 rp_bi_ctrl() {
-	python3 - <<'PYEOF' 2>/dev/null
-import ctypes, mmap, os
-base = int(open("/sys/bus/pci/devices/0000:0c:00.0/resource")
+	python3 - "$rpbdf" <<'PYEOF' 2>/dev/null
+import ctypes, mmap, os, sys
+base = int(open("/sys/bus/pci/devices/%s/resource" % sys.argv[1])
            .readline().split()[0], 16)
 fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
 m = mmap.mmap(fd, 4096, offset=base + 0x1000)
-reg = ctypes.c_uint32.from_buffer(m, 0xab8)
-print(hex(reg.value))
-del reg
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+off = None
+for i in range((u32(0) >> 24) & 0xff):
+    e = u32(4 + 4 * i)
+    if (e & 0xffff) == 0xc:
+        off = (e >> 20) & 0xfff
+print("%#x" % u32(off + 4))
 m.close(); os.close(fd)
 PYEOF
 }
