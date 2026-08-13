@@ -181,18 +181,19 @@ declare -A TOPO=(
 	[t22]=t22-unknown-coherency.sh
 	[t23]=t23-commit-fault.sh
 	[t24]=t24-adopt.sh
+	[t25]=t25-multiswitch.sh
 )
 # Host-driven suites: the topology script emits TAP directly instead
 # of pushing run-tests.sh into a guest. t13 is a negative launch (no
 # guest at all); t16 orchestrates its own multi-boot x-committed
 # scenarios; t17 interleaves QMP hotplug with guest checks. run_suite
 # handles them below.
-HOST_ONLY_SUITES=" t13 t16 t17 t23 t24 "
+HOST_ONLY_SUITES=" t13 t16 t17 t23 t24 t25 "
 # Default order: happy paths first, then mixed configs / fail-closed
 # gates, then the deeper topologies, then the guest-less checks. Later
 # suites depend on earlier invariants (region create, root cap_back_invalidate,
 # endpoint bi) already passing.
-ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t21 t22 t18 t16 t17 t23 t24 t13"
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t21 t22 t18 t16 t17 t23 t24 t25 t13"
 
 # No args: run everything. Otherwise run only the named suites, e.g.
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)
