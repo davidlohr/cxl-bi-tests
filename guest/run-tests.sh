@@ -231,14 +231,14 @@ saw_setup_failure() {
 		fail "dmesg reflects BI-disabled topology"
 	fi
 }
-# cxl_rr_assign_decoder's WARN_ONCE("mismatch decoder type") must not
-# fire for a HDM-DB attach: the endpoint decoder's target_type is
-# inherited from the region's type via cxl_rr_assign_decoder itself.
-no_type_mismatch_warn() {
-	if dmesg | grep -q "mismatch decoder type"; then
-		fail "no 'mismatch decoder type' WARN across BI attach"
+# cxl_rr_free_decoder's WARN_ONCE("region mismatch") must not fire
+# across BI attach/detach cycling: the decoder-to-region association
+# made by cxl_rr_assign_decoder must unwind symmetrically.
+no_region_mismatch_warn() {
+	if dmesg | grep -q "region mismatch"; then
+		fail "no 'region mismatch' WARN across BI attach"
 	else
-		ok "no 'mismatch decoder type' WARN across BI attach"
+		ok "no 'region mismatch' WARN across BI attach"
 	fi
 }
 
@@ -360,7 +360,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 	expect_eq "endpoint decoders_committed bumped" \
 		"$(port_committed_count "$ep")" "$((pre_committed + 1))"
 	no_setup_failure
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 
 	# Detach: reset commit, tear down region. Endpoint bi returns to 0.
 	destroy_region "$region"
@@ -377,7 +377,7 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 	expect_eq "endpoint bi=1 (recreated region)" \
 		"$(cat "$CXL/$dec/back_invalidate")" 1
 	destroy_region "$region"
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 
 	# Discovery behind a switch: the boot dmesg must show the BI
 	# capability walk (endpoint, RP and DSP decoders + the USP RT)
@@ -709,7 +709,7 @@ t11)	# PMEM HDM-DB region: create_pmem_region on the BI root.
 	expect_eq "endpoint decoder target_type=accelerator (pmem)" \
 		"$(endpoint_decoder_target_type "$dec")" accelerator
 	no_setup_failure
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	# Teardown: pmem regions also honor commit=0 + delete_region.
 	reset_region "$region"
 	echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
@@ -760,7 +760,7 @@ t12)	# One BI-capable + one non-BI endpoint under one switch, BI CFMWS.
 		check "dmesg: 'BI not enabled on device'" \
 			dmesg_saw "BI not enabled on device"
 	fi
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	;;
 
 # --------------------------------------------------------------- t14
@@ -819,7 +819,7 @@ t14)	# Two CFMWS windows: one BI, one HDM-H, two independent endpoints.
 		fi
 	fi
 	no_setup_failure
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	;;
 t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	# the same root port. Cycle a single endpoint decoder through
@@ -861,7 +861,7 @@ t15)	# One endpoint reachable by two CFMWS windows (BI + HDM-H) on
 	destroy_region "$region" "$rd_h"
 
 	no_setup_failure
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	;;
 
 # --------------------------------------------------------------- t18
@@ -1060,7 +1060,7 @@ t19)	# manual window-level 2-way HDM-DB interleave across two HBs.
 		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "11"
 	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
 	no_setup_failure
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	destroy_region "$region"
 	expect_eq "both endpoints bi=0 post-destroy" \
 		"$(cat "$CXL/$dec0/back_invalidate")$(cat "$CXL/$dec1/back_invalidate")" "00"
@@ -1125,7 +1125,7 @@ t20)	# manual interleave mixing coherency models must reject. Same
 	d_nobi=$(ep_decoder_for_mem "$m_nobi")
 	expect_eq "host-only endpoint survives, bi=0" \
 		"$(cat "$CXL/$d_nobi/back_invalidate")" 0
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	;;
 
 # --------------------------------------------------------------- t21
@@ -1194,7 +1194,7 @@ t21)	# BOTH-coherency endpoint (CXL_HDM_DECODER_COHERENCY_BOTH)
 		expect_eq "decoder type stays expander" \
 			"$(endpoint_decoder_target_type "$dec")" expander
 		destroy_region "$region" "$rd_h"
-		no_type_mismatch_warn
+		no_region_mismatch_warn
 	fi
 	;;
 
@@ -1232,7 +1232,7 @@ t22)	# BI device reporting Unknown coherency models. The kernel must
 	destroy_region "$region" "$rd"
 	expect_eq "decoder back to expander after destroy" \
 		"$(endpoint_decoder_target_type "$dec")" expander
-	no_type_mismatch_warn
+	no_region_mismatch_warn
 	;;
 esac
 
