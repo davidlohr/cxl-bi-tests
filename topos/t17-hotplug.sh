@@ -223,6 +223,15 @@ if [ "$(g dmesg | grep -c 'BI setup failed')" = 0 ]; then
 else
 	fail "no 'BI setup failed' across the hotplug lifecycle"
 fi
+# Host-driven suites return before run-all's generic oracle fold, so
+# check it here: no BI programming across the whole hotplug lifecycle
+# (adds included) may contradict the topology.
+if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+	ok "qemu BI oracle silent across the hotplug lifecycle"
+else
+	fail "qemu BI oracle silent across the hotplug lifecycle"
+	grep "CXL BI oracle" "$RUNDIR/qemu.log" | sed 's/^/# /'
+fi
 g dmesg > "$OUT/t17.dmesg" 2>/dev/null
 
 exit $((FAIL != 0))
