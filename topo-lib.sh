@@ -17,6 +17,21 @@ QMPSOCK=$RUNDIR/qmp-sock
 CONSOLE_LOG=$RUNDIR/console.log
 PIDFILE=$RUNDIR/qemu.pid
 
+# Serialize harness instances: concurrent runs share SSHPORT and the
+# pidfile, and stop_qemu kills by port pattern - two runs shred each
+# other's guests mid-scenario. The lock fd is inherited by suite
+# scripts run-all spawns; BI_TESTS_LOCKED keeps them from re-taking
+# the lock their parent already holds.
+mkdir -p "$RUNDIR"
+if [ -z "$BI_TESTS_LOCKED" ]; then
+	exec 9>"$RUNDIR/.lock"
+	if ! flock -n 9; then
+		echo "# waiting: another cxl-bi-tests run holds $RUNDIR/.lock" >&2
+		flock 9
+	fi
+	export BI_TESTS_LOCKED=1
+fi
+
 mkdir -p "$RUNDIR"
 
 # NB: no net.ifnames=0 - the guest image's netplan matches enp0s2, so the
