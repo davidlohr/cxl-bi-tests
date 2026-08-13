@@ -7,9 +7,9 @@
 #    dport devres group so a hot-remove/hot-add cycle is clean.
 #  - Topology walk: cxl_bi_setup enables BI on every dport in the path
 #    device -> DSP -> USP -> RP (Enable on the device-adjacent dport,
-#    Forward on a transit RP); failure rolls back only the dports that
-#    fully enabled, skipping the failed one. Cascaded switches are
-#    refused at the capability probe.
+#    Forward on every dport above it, at any switch depth); failure
+#    rolls back only the dports that fully enabled, skipping the
+#    failed one.
 #  - HDM decoder init: cxl_hdm_decoder->supported_coherency drives the
 #    endpoint decoder's default target_type; a decoder already
 #    committed with the HDM BI bit set is rejected (-ENXIO).
@@ -240,6 +240,37 @@ no_region_mismatch_warn() {
 	else
 		ok "no 'region mismatch' WARN across BI attach"
 	fi
+}
+
+# creg <bdf> <mode>: component-block register truth via /dev/mem.
+#   bictrl - BI Decoder Control (cap ID 0xC)
+#   hdmbi  - 1 iff every committed HDM decoder (cap ID 5) has BI=1,
+#            0 if a committed decoder lacks it, empty if none
+# Empty output = no /dev/mem MMIO; callers SKIP.
+creg() {
+	python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
+import ctypes, mmap, os, sys
+bdf, mode = sys.argv[1], sys.argv[2]
+base = int(open('/sys/bus/pci/devices/%s/resource' % bdf)
+           .readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 8192, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+caps = {}
+for i in range((u32(0) >> 24) & 0xff):
+    e = u32(4 + 4 * i)
+    caps[e & 0xffff] = (e >> 20) & 0xfff
+if mode == 'bictrl':
+    print('%#x' % u32(caps[0xc] + 4))
+else:
+    h = caps[0x5]
+    ndec = [1, 2, 4, 6, 8, 10, 12, 14][u32(h) & 0xf]
+    bi = [(u32(h + 0x20 * i + 0x20) >> 13) & 1
+          for i in range(ndec)
+          if (u32(h + 0x20 * i + 0x20) >> 10) & 1]
+    print('' if not bi else min(bi))
+m.close(); os.close(fd)
+PYEOF
 }
 
 # check_create_visibility <root_decoder>
@@ -576,8 +607,7 @@ t8)	# DSP not in 256B Flit mode. BI walk's DSP check fails, cxlds->bi=0.
 	;;
 
 # ---------------------------------------------------------------- t9
-t9)	# cascaded switches: BI refused at the capability probe, the
-	# rest of the topology stays fully functional.
+t9)	# cascaded switches: BI comes up across both switch levels.
 	check_cap_back_invalidate_present
 	check_endpoint_bi_present
 	# Expect at least two non-root cxl_port entries (outer + inner switch).
@@ -588,12 +618,6 @@ t9)	# cascaded switches: BI refused at the capability probe, the
 		fail "cascaded switches ($nports cxl_port(s), want >=2)"
 	fi
 
-	if dmesg_saw "cascaded switches unsupported"; then
-		ok "cascade refused at capability probe"
-	else
-		fail "cascade refused at capability probe"
-	fi
-
 	rd=$(root_decoder_bi)
 	rd_h=$(root_decoder_nobi)
 	[ -n "$rd" ]   || { fail "no BI root decoder"; exit 1; }
@@ -601,22 +625,60 @@ t9)	# cascaded switches: BI refused at the capability probe, the
 	mem=$(all_mems | head -1)
 	dec=$(ep_decoder_for_mem "$mem")
 
-	# The BI window must refuse the endpoint at attach.
+	# The BI window must accept the endpoint two switch hops down.
 	region=$(create_region "$rd" 1 256 "$mem")
-	if [ -z "$region" ]; then
-		ok "HDM-DB region refused (cascaded path)"
+	[ -n "$region" ] && ok "create HDM-DB region (cascaded path)" \
+		|| { fail "create HDM-DB region (cascaded path)"; exit 1; }
+	check "commit HDM-DB region across cascade" commit_region "$region"
+	expect_eq "endpoint bi=1 (cascade)" \
+		"$(cat "$CXL/$dec/back_invalidate")" 1
+
+	# Register truth while the HDM-DB region is committed: BI roles
+	# by position (Table 8-157), and the BI bit in the committed HDM
+	# decoder at each switch USP - the decoder an Enabled DSP must
+	# verify before accepting a BISnp (Table 9-13).
+	path=$(readlink -f "$CXL/$mem")
+	adj=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	usp_in=$(awk -F/ '{print $(NF-3)}' <<<"$path")
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	usp_out=$(awk -F/ '{print $(NF-5)}' <<<"$path")
+	rp=$(awk -F/ '{print $(NF-6)}' <<<"$path")
+	actl=$(creg "$adj" bictrl)
+	if [ -z "$actl" ]; then
+		for i in 1 2 3 4 5; do
+			ok "cascade register truth # SKIP no /dev/mem MMIO"
+		done
 	else
-		fail "HDM-DB region refused (cascaded path)"
-		destroy_region "$region" "$rd"
+		expect_eq "adjacent DSP Enable (committed region)" \
+			"$((actl & 0x3))" 2
+		expect_eq "transit DSP Forward (committed region)" \
+			"$(($(creg "$transit" bictrl) & 0x3))" 1
+		expect_eq "RP Forward (committed region)" \
+			"$(($(creg "$rp" bictrl) & 0x3))" 1
+		expect_eq "inner USP committed HDM decoder BI" \
+			"$(creg "$usp_in" hdmbi)" 1
+		expect_eq "outer USP committed HDM decoder BI" \
+			"$(creg "$usp_out" hdmbi)" 1
 	fi
-	dmesg_saw "BI not enabled on device" && \
-		ok "refusal diagnosed in dmesg" || \
-		fail "refusal diagnosed in dmesg"
-	expect_eq "endpoint bi=0 (cascade)" \
+	destroy_region "$region" "$rd"
+	expect_eq "endpoint bi=0 after destroy" \
 		"$(cat "$CXL/$dec/back_invalidate")" 0
-	# The refused attempt leaves an empty region device behind.
-	orph=$(ls $CXL 2>/dev/null | grep '^region' | head -1)
-	[ -n "$orph" ] && destroy_region "$orph" "$rd"
+
+	# The walk must reach every level: BI decoders on the endpoint,
+	# the RP and both DSPs, a route table on each switch USP, and a
+	# commit at each DSP and each RT - the RP and the device take
+	# none (Table 8-156).
+	ndec=$(dmesg | grep -c "found BI Decoder capability")
+	[ "$ndec" -ge 4 ] && ok "BI Decoder caps discovered (ep+rp+2 dsp)" \
+		|| fail "BI Decoder caps discovered (got $ndec, want >= 4)"
+	nrt=$(dmesg | grep -c "found BI RT capability")
+	[ "$nrt" -ge 2 ] && ok "BI RT caps discovered (both USPs)" \
+		|| fail "BI RT caps discovered (got $nrt, want >= 2)"
+	ncmt=$(dmesg | grep -c "BI-ID commit wait took")
+	[ "$ncmt" -ge 4 ] && ok "BI-ID commits at both switch levels" \
+		|| fail "BI-ID commits at both levels (got $ncmt, want >= 4)"
+	check "dmesg: endpoint BI requests enabled" \
+		dmesg_saw "BI requests enabled"
 
 	# HDM-H still assembles and commits across both switches.
 	region=$(create_region "$rd_h" 1 256 "$mem")

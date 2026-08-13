@@ -27,7 +27,7 @@ gate under test is isolated.
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
 | **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
 | **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop (a CXL 4.0 §9.14.3 mixed configuration). Emits TAP `# SKIP` today — see Known limitations. |
-| **t9** | Cascaded switches (two switch pairs), BI + HDM-H CFMWS | BI is a single-switch-level feature: the capability probe refuses the cascade ("cascaded switches unsupported"), the BI window rejects the endpoint at attach, and an HDM-H region still commits across both switches. Phase 2 unbinds the outer switch port's driver with the HDM-H region committed: the devres cascade tears the child subtree down first, the emptied port is reaped, and a `cxl_mem` rebind re-enumerates the cascade (refusing BI again); a second cycle fires the unbind under region churn and a decoder reader. |
+| **t9** | Cascaded switches (two switch pairs), BI + HDM-H CFMWS | BI works at any switch depth: an HDM-DB region creates and commits two switch hops down (endpoint `back_invalidate=1`), the capability walk finds four BI decoders, both route tables and a commit at each switch level, and an HDM-H region still commits across both switches. Phase 2 unbinds the outer switch port's driver with an HDM-H region committed: the devres cascade tears the child subtree down first and disables BI on the way, the emptied port is reaped, and a `cxl_mem` rebind re-enumerates the cascade and re-enables BI; a second cycle fires the unbind under region churn and a decoder reader. |
 | **t10** | Two endpoints under **different** RPs, BI CFMWS | Each RP gets its own independent BI setup; an HDM-DB region commits (2-way cross-RP when the root allows it, otherwise a per-RP 1-way). |
 | **t11** | Endpoint with persistent memdev, BI CFMWS | An HDM-DB PMEM region commits and the endpoint reports `bi=1`. |
 | **t12** | One BI + one non-BI endpoint under one switch, BI CFMWS | A 2-way region attach across both rejects the non-BI target. |
@@ -99,10 +99,9 @@ Failures map to specific root causes:
 
 - Missing `cap_back_invalidate` (root) or `back_invalidate` (endpoint) → kernel lacks the HDM-DB
   region ABI, or the attribute group's `is_visible` is misconfigured.
-- `BI setup failed` in dmesg on t1/t2/t5/t6 → topology walk failed
+- `BI setup failed` in dmesg on t1/t2/t5/t6/t9 → topology walk failed
   where it should have succeeded (register probing, USP probe, or
-  `nr_bi` accounting regression). On t9 any BI setup activity at all
-  means the cascade refusal regressed.
+  `nr_bi` accounting regression).
 - `BI setup failed` **absent** in dmesg on t7/t8 → `cxl_bi_setup`
   didn't bail on the missing 256B Flit hop as it should.
 - `-EBUSY` on the second bind in t2/t5 phase 2 → dport BI Decoder

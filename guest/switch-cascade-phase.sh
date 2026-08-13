@@ -1,17 +1,20 @@
 #!/bin/bash
 # t9 phase 2: mid-level switch port unbind cascade.
 #
-# BI is refused on this topology (single-switch-level scope), so the
-# phase exercises the port lifecycle without BI: unbinding the *outer*
-# switch port's cxl_port driver must tear down the child subtree first
-# (inner port, endpoint port, region) and free the outer port's dports
-# last. Once the cascaded memdev detach runs cxl_detach_ep, the outer
-# port is empty and driverless and gets reaped outright; a cxl_mem
-# rebind then re-enumerates the whole cascade (fresh port numbers,
-# re-probed dports), the capability probe refuses BI again, and a new
-# HDM-H region must commit. A second cycle fires the unbind under
-# region create/commit churn plus a decoder-attribute reader to race
-# the cascade against in-flight attribute reads.
+# Unbinding the *outer* switch port's cxl_port driver must tear down
+# the child subtree first (inner port, endpoint port, region), disable
+# BI along the way, and free the outer port's dports last. Once the
+# cascaded memdev detach runs cxl_detach_ep, the outer port is empty
+# and driverless and gets reaped outright; a cxl_mem rebind then
+# re-enumerates the whole cascade (fresh port numbers, re-probed
+# dports), BI comes back up across both levels, and a new HDM-H region
+# must commit. A second cycle fires the unbind under region
+# create/commit churn plus a decoder-attribute reader to race the
+# cascade against in-flight attribute reads.
+#
+# The regions here are HDM-H on purpose: this phase is about port
+# lifetime, so the endpoint's back_invalidate stays 0 throughout even
+# though BI itself is enabled on the topology.
 #
 # Output: TAP-ish, exit 0 iff all checks pass.
 set -o pipefail
@@ -141,11 +144,17 @@ done
 # The region device survives target loss; it must be decommitted.
 expect_eq "cascade: region decommitted" \
 	"$(cat "$CXL/$region/commit" 2>/dev/null)" 0
-# BI was refused at probe, so the teardown must not touch it either.
-if dmesg | grep -q "BI requests"; then
-	fail "cascade: no BI enable/disable on refused topology"
+# BI came up on the cascade, so the teardown must take it back down.
+# cxl_bi_dealloc() runs from the endpoint port's devres release, which
+# can trail the sysfs directory going away - poll rather than assume.
+for i in $(seq 1 100); do
+	dmesg | grep -q "BI requests disabled" && break
+	sleep 0.1
+done
+if dmesg | grep -q "BI requests disabled"; then
+	ok "cascade: BI disabled on teardown"
 else
-	ok "cascade: no BI enable/disable on refused topology"
+	fail "cascade: BI disabled on teardown"
 fi
 
 # The memdev detach is a workqueue item; the same pass runs
@@ -175,12 +184,12 @@ dmesg | grep -q "BI setup failed" && fail "cascade: no 'BI setup failed'" \
 dec2=$(rebind_and_wait "$mem")
 if [ -n "$dec2" ]; then
 	ok "rebuild: endpoint decoder back after rebind ($dec2)"
-	# The capability probe re-ran on rebind and refused again
+	# The capability probe re-ran on rebind and brought BI back up
 	# (dmesg was cleared before the unbind).
-	if dmesg | grep -q "cascaded switches unsupported"; then
-		ok "rebuild: cascade refused again on re-probe"
+	if dmesg | grep -q "BI requests enabled"; then
+		ok "rebuild: BI re-enabled on re-probe"
 	else
-		fail "rebuild: cascade refused again on re-probe"
+		fail "rebuild: BI re-enabled on re-probe"
 	fi
 	region=$(create_region "$rd" "$dec2")
 	if [ -n "$region" ] && echo 1 > "$CXL/$region/commit" 2>/dev/null; then

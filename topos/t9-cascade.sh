@@ -12,18 +12,18 @@
 # Two CFMWS windows over the same host bridge: fmw.0 carries the BI
 # restriction, fmw.1 is plain HDM-H.
 #
-# BI is a single-switch-level feature: a transit DSP would stamp its
-# own Secondary Bus Number over the originating BI-ID (Table 9-13),
-# so cxl_bi_probe_capable() refuses this topology outright. t9
-# verifies:
-#   - The refusal: bi_capable stays 0, "cascaded switches unsupported"
-#     in dmesg, the BI window rejects the endpoint at attach ("BI not
-#     enabled on device"), and the endpoint itself survives.
-#   - Everything but BI works across the cascade: an HDM-H region on
-#     fmw.1 creates and commits through both switches.
+# BI works at any switch depth (Table 7-97): the DSP above the device
+# assigns the BI-ID, and every dport above it - the transit DSP and
+# the RP - forwards it untouched. t9 verifies:
+#   - BI across both levels: an HDM-DB region on fmw.0 creates and
+#     commits, the endpoint reads back_invalidate=1, and the
+#     capability walk finds all four BI decoders, both route tables,
+#     and commits at both switch levels.
+#   - HDM-H alongside: a region on fmw.1 creates and commits through
+#     both switches with BI off.
 #   - Port lifecycle (phase 2): outer-port unbind tears the subtree
-#     down, the emptied outer port is reaped, rebind rebuilds the
-#     cascade, and the refusal re-fires on re-probe.
+#     down and disables BI on the way out, the emptied outer port is
+#     reaped, and rebind rebuilds the cascade and re-enables BI.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 

@@ -104,10 +104,10 @@ run_suite() { # run_suite <topo-script> <suite>
 	fi
 
 	# t9 phase 2 unbinds the outer switch port's driver with a
-	# committed HDM-H region live (BI is refused on cascades): the
-	# devres cascade must tear the child subtree down first, reap
-	# the emptied outer port, and rebuild the whole cascade on
-	# cxl_mem rebind, refusing BI again at the re-probe.
+	# committed HDM-H region live: the devres cascade must tear the
+	# child subtree down first, disable BI on the way out, reap the
+	# emptied outer port, and rebuild the whole cascade on cxl_mem
+	# rebind, re-enabling BI at the re-probe.
 	if [ "$suite" = t9 ] && [ "$rc" -eq 0 ]; then
 		echo "--- t9 phase 2: switch-unbind cascade ---"
 		guest_scp "$BI_TESTS_DIR/guest/switch-cascade-phase.sh" \
