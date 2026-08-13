@@ -17,6 +17,8 @@ QEMU knobs skip themselves when the binary lacks them.
 Twenty-two topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
+Per-suite QEMU topology diagrams live in [topologies.md](topologies.md).
+
 | Suite | Topology | What it exercises |
 |-------|----------|-------------------|
 | **t1** | Endpoint directly under an RP, no switch, BI CFMWS | BI enables end-to-end through a single dport; an HDM-DB region commits and the endpoint reports `bi=1`. |
