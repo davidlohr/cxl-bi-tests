@@ -106,14 +106,9 @@ else
 	fail "bi: committed decoder enumerated (mode=ram)"
 fi
 # Direct attach: the RP must terminate BI (BI Enable), not forward
-# (Table 8-157). Asserted twice: the kernel's decision via dmesg, and
-# the programmed register via the qemu -d guest_errors oracle, which
-# flags any RP BI programming that contradicts the topology.
-if dmesg_has "RP BI enable (direct attach)"; then
-	ok "bi: RP programmed BI Enable (direct attach)"
-else
-	fail "bi: RP programmed BI Enable (direct attach)"
-fi
+# (Table 8-157) - asserted by register readback in t24's adopt
+# scenario, and by the qemu -d guest_errors oracle below on every
+# RP BI write.
 if [ "$(grep -c "CXL BI oracle" "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
 	ok "bi: qemu RP BI oracle silent"
 else

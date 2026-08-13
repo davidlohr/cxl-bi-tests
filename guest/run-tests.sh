@@ -389,10 +389,9 @@ t2)	# switched happy path: DSP + USP + RP + endpoint.
 		dmesg_saw "found BI RT capability"
 	check "dmesg: 'BI-ID commit wait took'" \
 		dmesg_saw "BI-ID commit wait took"
-	# The RP sits above the switch: it must forward, not terminate,
-	# BISnp (Table 8-157 / 9.14.2 allocate step 6).
-	check "dmesg: RP programmed BI Forward (switch below)" \
-		dmesg_saw "RP BI forward"
+	# The RP role by position (Forward above a switch, Table 8-157 /
+	# 9.14.2 allocate step 6) is asserted by register readback in
+	# phase 2 and in t24; the qemu BI oracle guards every write.
 
 	# Phase 2 (unbind/rebind) is driven from run-all.sh with the
 	# guest/unbindrebind-phase.sh helper.
