@@ -76,24 +76,66 @@ role() { # role <bdf> -> ctrl & 3, empty on failure
 echo "# CXL BI multi-level switch suite t25"
 
 # --- scenario 1: shared transit DSP refcount -------------------------
-launch_qemu \
-  -object memory-backend-ram,id=m0,size=1G \
-  -object memory-backend-ram,id=m1,size=1G \
-  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
-  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
-  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
-  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on \
-  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
-  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on \
-  -device cxl-downstream,port=1,bus=us1,id=dsp2,chassis=0,slot=7,x-256b-flit=on \
-  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
-  -device cxl-type3,bus=dsp2,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on \
-  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+launch_shared() {
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -object memory-backend-ram,id=m1,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on \
+	  -device cxl-downstream,port=1,bus=us1,id=dsp2,chassis=0,slot=7,x-256b-flit=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+	  -device cxl-type3,bus=dsp2,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+}
+
+# Both endpoints must have probed before any BI state means anything.
+# Two memdevs under one switch race to create the ports they share, and
+# the loser's cxl_mem probe can come back -EBUSY; every BI assertion
+# below then fails while pointing at the wrong thing. Retry the boot
+# once so an intermittent race does not read as BI misprogramming, and
+# report the probe error rather than the symptoms if it persists.
+shared_ready() {
+	local m
+	for m in mem0 mem1; do
+		# driver link present == cxl_mem probe succeeded for it
+		g "test -e /sys/bus/cxl/devices/$m/driver" || return 1
+		# and its endpoint port exists (the BI path hangs off it)
+		g "for e in /sys/bus/cxl/devices/endpoint*; do
+			[ \"\$(basename \$(readlink -f \$e/uport))\" = $m ] &&
+				exit 0
+		   done; exit 1" || return 1
+	done
+	return 0
+}
+
+probe_errors() { g dmesg | grep -E "cxl_mem mem[0-9]+: probe: -|probe with driver cxl_mem failed"; }
+
+launch_shared
 if wait_for_guest 180; then
 	ok "shared: guest booted"
 else
 	fail "shared: guest booted"; exit 1
 fi
+
+if ! shared_ready; then
+	echo "# shared: endpoint probe incomplete, retrying the boot"
+	probe_errors | sed 's/^/# first attempt: /'
+	stop_qemu >/dev/null 2>&1
+	launch_shared
+	wait_for_guest 180 || { fail "shared: guest booted (retry)"; exit 1; }
+fi
+if shared_ready; then
+	ok "shared: both endpoints probed"
+else
+	fail "shared: both endpoints probed"
+	probe_errors | sed 's/^/# /'
+	exit 1
+fi
+
 dm=$(g dmesg)
 if [ "$(grep -c 'BI requests enabled' <<<"$dm")" = 2 ]; then
 	ok "shared: both endpoints BI enabled"
