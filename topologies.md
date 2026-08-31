@@ -300,3 +300,30 @@ committed. Counts: adopt `rp0`=1 (an adopted level takes nr_bi++ and
 latches its role exactly like a programmed one — teardown accounting
 depends on it); fresh-dev `dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/
 `rp0`=1. Each scenario's unbind walks its counts back to 0.
+
+## t26 — intentionally unused
+
+Reserved for an HDM-D window suite (a CFMWS with bit[0]=1, bit[5]=0 via
+`cxl-fmw.0.host-only=off`), which would cover the endpoint-vs-window
+asymmetry in `cxld_set_type()`. Not buildable today: QEMU models only
+`cxl-type3`, and HDM-D flows belong to Type 2 devices, so the window
+would have no legitimate occupant. `x-committed` cannot stage such a
+decoder either - it is binary, setting either the BI bit or the
+host-only bit, never leaving both clear.
+
+## t27 — BI across a device reset (two boots)
+
+```
+pxb-cxl (cxl.1)
+└─ cxl-rp rp0            RP → Enable   nr_bi=1   (untouched by the reset)
+   └─ cxl-type3 mem0     (hdm-db)      reset target
+```
+
+Direct attach so the Root Port is the device-adjacent dport, and the
+reset lands strictly below it - which makes "the endpoint's BI Decoder
+was wiped while the dport above still points at it" directly
+observable. Reset is issued through the kernel (`/sys/bus/pci/devices/
+<ep>/reset`, method `cxl_bus`) rather than a raw setpci poke, so the
+`pci_error_handlers` `.reset_prepare`/`.reset_done` path actually runs.
+Boot 1 resets with nothing committed; boot 2 commits an HDM-DB region
+first.
