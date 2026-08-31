@@ -14,12 +14,21 @@ Conventions shared by (nearly) all of them:
 - Windows: one 4G CFMWS (`cxl-fmw.0`) with `interleave-granularity=4k`
   and `back-invalidate=on` — "the BI window". Suites that need an HDM-H
   window add a second CFMWS without the restriction.
-- Role legend, per CXL BI Decoder programming (Table 8-157 / 9-13): the
-  dport immediately above the device programs **Enable** (assigns the
-  BI-ID from its secondary bus number); every dport above it programs
-  **Forward**; switch USPs carry the BI Route Table and, when a region
-  is committed, the HDM decoder BI bit an enabled DSP verifies before
-  accepting a BISnp (Table 9-13).
+- Role legend, in the spec's own vocabulary. Table 8-157 defines BI
+  **Enable** as "indicates a BI-capable device is connected directly to
+  this Downstream Port", so the role follows adjacency, not port type -
+  a Root Port takes Enable too when the device hangs off it. Table 7-97
+  names the two DSP positions: **Above SLD** (the device is directly
+  connected) does "Received BI-ID is ignored, BI-ID[7:0]<-BusNum(vPPB)",
+  i.e. it stamps; **Above HBR USP** (a switch sits below) does
+  "Propagate BI-ID", i.e. it relays what was stamped deeper. Exactly one
+  dport per path stamps; every dport above it relays, and programs
+  **Forward**. Table 7-97 is a switch table and has no Root Port column,
+  so a Root Port carries no positional label below - its role comes from
+  Table 8-157 ("connected directly") and Table 9-13, which is also the
+  only place the root-port case is described at all. Switch USPs carry
+  the BI Route Table and, when a region is committed, the HDM decoder BI
+  bit an Enabled DSP verifies before accepting a BISnp (Table 9-13).
 - **nr_bi** is the kernel's per-dport count of BI-enabled endpoints below
   that dport (adopted firmware paths count too). The registers are
   programmed on the 0→1 edge, cleared and dealloc-committed on the 1→0
@@ -34,22 +43,22 @@ Conventions shared by (nearly) all of them:
 
 ## t25 — multi-level switch invariants (three boots)
 
-### t25/shared: two endpoints through one transit DSP
+### t25/shared: two endpoints through one Above-HBR-USP DSP
 
 ```
 pxb-cxl (cxl.1)
-└─ cxl-rp rp0                        RP        → Forward   nr_bi=2
-   └─ cxl-upstream us0               outer USP (BI RT, shared)
-      └─ cxl-downstream dsp0         TRANSIT   → Forward   nr_bi=2
-         └─ cxl-upstream us1         inner USP (BI RT, shared)
-            ├─ cxl-downstream dsp1   adjacent  → Enable    nr_bi=1
-            │  └─ cxl-type3 mem0     (hdm-db)
-            └─ cxl-downstream dsp2   adjacent  → Enable    nr_bi=1
-               └─ cxl-type3 mem1     (hdm-db)
+└─ cxl-rp rp0                       switch below   → Forward  nr_bi=2
+   └─ cxl-upstream us0              outer USP (BI RT, shared)
+      └─ cxl-downstream dsp0        Above HBR USP  → Forward  nr_bi=2
+         └─ cxl-upstream us1        inner USP (BI RT, shared)
+            ├─ cxl-downstream dsp1  Above SLD      → Enable   nr_bi=1
+            │  └─ cxl-type3 mem0    (hdm-db)
+            └─ cxl-downstream dsp2  Above SLD      → Enable   nr_bi=1
+               └─ cxl-type3 mem1    (hdm-db)
 ```
 
-Both paths converge at `dsp0`, the one dport that is transit for two
-devices at once, and each enable owes its own commit edge there
+Both paths converge at `dsp0`, the one dport that is Above HBR USP for
+two devices at once, and each enable owes its own commit edge there
 (Table 8-152/8-156). The teardown walks the counts back down:
 
 ```
@@ -59,15 +68,15 @@ unbind mem0       1     1     0*    1     * cleared + dealloc commit
 unbind mem1       0*    0*    0     0*    dsp0/rp0 hold Forward until here
 ```
 
-### t25/rollback: transit commit fault on a cascade
+### t25/rollback: commit fault at an Above-HBR-USP DSP
 
 ```
-rp0 ─ us0 ─ dsp0 (x-bi-commit-fault=error)   transit, commit FAILS
-            └─ us1 ─ dsp1                    adjacent, enabled first
+rp0 ─ us0 ─ dsp0 (x-bi-commit-fault=error)   Above HBR USP, commit FAILS
+            └─ us1 ─ dsp1                    Above SLD, enabled first
                      └─ cxl-type3 mem0
 ```
 
-The bottom-up walk enables and commits the adjacent level (`dsp1`
+The bottom-up walk enables and commits the Above-SLD level (`dsp1`
 nr_bi 0→1), then hits the forced commit error at `dsp0` — which never
 increments (the failure path returns before nr_bi++). The rollback
 unwinds `dsp1` back to 0; every count ends 0 and both registers read
@@ -76,9 +85,9 @@ cleared.
 ### t25/deep: three switch levels
 
 ```
-rp0 ─ us0 ─ dsp0        outer transit → Forward   nr_bi=1
-       └─ us1 ─ dsp1    mid transit   → Forward   nr_bi=1
-             └─ us2 ─ dsp2   adjacent → Enable    nr_bi=1
+rp0 ─ us0 ─ dsp0        Above HBR USP → Forward   nr_bi=1
+       └─ us1 ─ dsp1    Above HBR USP → Forward   nr_bi=1
+             └─ us2 ─ dsp2  Above SLD  → Enable   nr_bi=1
                       └─ cxl-type3 mem0 (hdm-db)
 ```
 
@@ -93,9 +102,9 @@ counts and roles that prove the walk is depth-agnostic (Table 7-97
 rp0 ─ cxl-type3 mem0 (hdm-db)        RP → Enable   nr_bi=1
 ```
 
-The minimal BI path: the RP is the device-adjacent dport and takes the
-Enable itself; no switch, no commit anywhere (Table 8-156 reserves the
-commit at RPs and devices).
+The minimal BI path: the device is connected directly to the RP, so the
+RP takes the Enable itself; no switch, and no commit anywhere (Table
+8-156 reserves the commit at RPs and devices).
 
 ## t2 — single switch
 
@@ -130,7 +139,7 @@ rp0 ─ us0 ─ dsp0 ─ mem0 (hdm-db)     rp0 → Forward  nr_bi=2
 
 A 2-way HDM-DB region across both; the shared levels are the USP/RP.
 Phase 2 hot-removes one endpoint: `rp0` 2→1 and it must hold Forward
-for the survivor. (The shared-*transit* variant is t25/shared.)
+for the survivor. (The shared Above-HBR-USP variant is t25/shared.)
 
 ## t6 — switch USP without a BI RT
 
@@ -150,8 +159,8 @@ negative cannot be staged.
 
 ```
 rp0 ─ us0 ─ dsp0 ─ us1 ─ dsp1 ─ cxl-type3 mem0 (hdm-db)
-RP → Fwd     transit → Fwd     adjacent → Enable
-nr_bi=1      nr_bi=1           nr_bi=1
+RP → Fwd     Above HBR USP → Fwd     Above SLD → Enable
+nr_bi=1      nr_bi=1                 nr_bi=1
 ```
 
 Windows: BI (`fmw.0`) plus a plain HDM-H window (`fmw.1`). An HDM-DB
@@ -294,12 +303,12 @@ increments); adopt-rt and dealloc-err reach t2's steady state
 
 Adoption as a path property: a firmware-enabled direct-attach device
 adopts with zero commit cycles; staged-committed dports under a device
-firmware did NOT enable still owe their commits; a transit DSP staged
-with the adjacent role (Enable) gets corrected to Forward and
-committed. Counts: adopt `rp0`=1 (an adopted level takes nr_bi++ and
-latches its role exactly like a programmed one — teardown accounting
-depends on it); fresh-dev `dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/
-`rp0`=1. Each scenario's unbind walks its counts back to 0.
+firmware did NOT enable still owe their commits; a DSP that is Above
+HBR USP but staged with the Above-SLD role (Enable) gets corrected to
+Forward and committed. Counts: adopt `rp0`=1 (an adopted level still
+takes nr_bi++, so teardown unwinds it like any other); fresh-dev
+`dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/`rp0`=1. Each scenario's
+unbind walks its counts back to 0.
 
 ## t26 — intentionally unused
 
@@ -319,8 +328,8 @@ pxb-cxl (cxl.1)
    └─ cxl-type3 mem0     (hdm-db)      reset target
 ```
 
-Direct attach so the Root Port is the device-adjacent dport, and the
-reset lands strictly below it - which makes "the endpoint's BI Decoder
+Direct attach so the device is connected directly to the Root Port and
+the reset lands strictly below it - which makes "the endpoint's BI Decoder
 was wiped while the dport above still points at it" directly
 observable. Reset is issued through the kernel (`/sys/bus/pci/devices/
 <ep>/reset`, method `cxl_bus`) rather than a raw setpci poke, so the
