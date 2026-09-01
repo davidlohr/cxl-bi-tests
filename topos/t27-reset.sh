@@ -87,6 +87,10 @@ launch_t27() {
 # pci_error_handlers path runs. Echo the method actually used.
 do_reset() {
 	local tag=$1 ep=$2 method
+	# Pin the CXL-aware SBR: with DEVCAP FLR advertised (faithful-FLR
+	# qemu), flr outranks cxl_bus and a bare reset write would FLR -
+	# which by design no longer wipes anything this suite measures.
+	g "echo cxl_bus > /sys/bus/pci/devices/$ep/reset_method" 2>/dev/null
 	method=$(g "cat /sys/bus/pci/devices/$ep/reset_method 2>/dev/null")
 	echo "# $tag: reset_method='$method'"
 	if g "test -w /sys/bus/pci/devices/$ep/reset"; then
@@ -476,9 +480,8 @@ path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
 ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
 dsp=$(awk -F/ '{print $(NF-2)}' <<<"$path")
 rp=$(awk -F/ '{print $(NF-4)}' <<<"$path")
-echo "# switch: reset_method='$(g "cat /sys/bus/pci/devices/$ep/reset_method")'"
 g "dmesg -C" >/dev/null
-if g "echo 1 > /sys/bus/pci/devices/$ep/reset"; then
+if do_reset "switch" "$ep"; then
 	ok "switch: reset issued through the kernel"
 else
 	fail "switch: reset issued through the kernel"; exit 1

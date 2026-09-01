@@ -360,7 +360,9 @@ Boot 1 resets with nothing committed, then walks the whole recovery
 arc: the invalidated flag refuses an HDM-DB attach, unbind unwinds the
 RP anyway, and a rebind re-runs the enable path from scratch until a
 region commits again. Boot 2 commits an HDM-DB region first. Boot 3 is
-the FLR arm (self-SKIPs until qemu's cxl-type3 advertises DEVCAP FLR).
+the FLR arm, live against the faithful-FLR qemu: DEVCAP FLR advertised,
+CXL.cache/mem component registers preserved, so the reset that must
+not wipe BI measurably does not - and the invalidation stays silent.
 Boot 4 moves the device below a switch:
 
 ```
