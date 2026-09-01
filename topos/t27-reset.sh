@@ -187,6 +187,8 @@ fi
 # back, so .reset_done must notice and fail the software state closed.
 if [ "$WIPED" != 1 ]; then
 	skip "no-region: kernel invalidates cxlds->bi (premise absent)"
+	skip "no-region: post-reset HDM-DB attach fails closed"
+	skip "no-region: refusal names the device gate"
 	skip "no-region: unbind quiet after invalidation"
 	skip "no-region: post-reset unbind unwinds the RP"
 else
@@ -195,6 +197,38 @@ else
 	else
 		fail "no-region: kernel invalidates cxlds->bi"
 	fi
+	# The fail-closed consequence, end to end: with cxlds->bi
+	# invalidated, an HDM-DB region attach must refuse rather than
+	# commit device-coherent memory over a device that can no
+	# longer issue BISnp.
+	rd=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+			[ -e "$d/cap_back_invalidate" ] || continue
+			[ "$(cat $d/cap_back_invalidate)" = 1 ] &&
+				basename $d && break
+		done')
+	region=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+	dec=$(g 'basename $(ls -d /sys/bus/cxl/devices/endpoint*/decoder*.0 | head -1)')
+	g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+	   echo $region > \$CXL/$rd/create_ram_region;
+	   R=\$CXL/$region;
+	   echo 256 > \$R/interleave_granularity;
+	   echo 1 > \$R/interleave_ways;
+	   echo \$sz > \$R/size;
+	   echo 0 > \$CXL/$dec/dpa_size 2>/dev/null;
+	   echo ram > \$CXL/$dec/mode 2>/dev/null;
+	   echo \$sz > \$CXL/$dec/dpa_size" >/dev/null
+	if g "echo $dec > /sys/bus/cxl/devices/$region/target0"; then
+		fail "no-region: post-reset HDM-DB attach fails closed"
+	else
+		ok "no-region: post-reset HDM-DB attach fails closed"
+	fi
+	if g dmesg | grep -q "BI not enabled on device"; then
+		ok "no-region: refusal names the device gate"
+	else
+		fail "no-region: refusal names the device gate"
+	fi
+	g "echo $region > /sys/bus/cxl/devices/$rd/delete_region" \
+		>/dev/null 2>&1
 	# The invalidated flag must not leak the dport refcounts:
 	# dealloc always unwinds, so the unbind still clears the RP,
 	# and quietly - the endpoint disable sees hardware and
@@ -302,5 +336,46 @@ else
 fi
 oracle_silent "with-region"
 g dmesg > "$OUT/t27-with-region.dmesg" 2>/dev/null
+
+# --- scenario 3: FLR must not trip the invalidation ------------------
+# An FLR leaves the CXL.cache/mem component registers alone, so
+# .reset_done should find BI Enable still set and stay silent. qemu's
+# cxl-type3 does not advertise DEVCAP FLR today, so this self-SKIPs;
+# the assertion is written hardware-first (warn iff the register was
+# actually wiped) so a model that wires FLR to a full device reset
+# still passes for the right reason once FLR appears.
+launch_t27 || { fail "flr: launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "flr: guest booted"
+else
+	fail "flr: guest booted"; exit 1
+fi
+path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+if ! g "echo flr > /sys/bus/pci/devices/$ep/reset_method"; then
+	skip "flr: FLR issued (device does not advertise FLR)"
+	skip "flr: invalidation tracks the hardware across FLR"
+else
+	g "dmesg -C" >/dev/null
+	if g "echo 1 > /sys/bus/pci/devices/$ep/reset"; then
+		ok "flr: FLR issued"
+	else
+		fail "flr: FLR issued"
+	fi
+	ec=$(bi_ctrl "$ep")
+	dm=$(g dmesg)
+	warned=0; grep -q "BI disabled by reset" <<<"$dm" && warned=1
+	if [ -z "$ec" ]; then
+		skip "flr: invalidation tracks the hardware across FLR (no /dev/mem)"
+	else
+		wiped=$(( (ec & 0x2) == 0 ))
+		if [ "$wiped" = "$warned" ]; then
+			ok "flr: invalidation tracks the hardware across FLR (wiped=$wiped)"
+		else
+			fail "flr: warn/wipe mismatch (ctrl=$ec warned=$warned)"
+		fi
+	fi
+fi
+g dmesg > "$OUT/t27-flr.dmesg" 2>/dev/null
 
 exit $((FAIL != 0))
