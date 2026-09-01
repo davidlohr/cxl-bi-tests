@@ -101,6 +101,21 @@ else
 	ok "dmesg: BI unbind message optional"
 fi
 
+# BI must outlive the decoders it serves: cxl_bi_setup() registers its
+# teardown before the decoder setup, so devres unwinds the decoders
+# first. Observable as the endpoint decoder reap preceding the BI
+# disable in dmesg (both are cxl_core dyndbg lines, enabled by the
+# harness).
+reap=$(dmesg | grep -n "endpoint[0-9]*: reap: decoder" | head -1 | cut -d: -f1)
+bidis=$(dmesg | grep -n "BI requests disabled" | head -1 | cut -d: -f1)
+if [ -z "$reap" ] || [ -z "$bidis" ]; then
+	ok "unbind order: decoders before BI # SKIP marker missing (dyndbg off?)"
+elif [ "$reap" -lt "$bidis" ]; then
+	ok "unbind order: decoders reaped before BI came down"
+else
+	fail "unbind order: BI came down before the decoders (line $bidis < $reap)"
+fi
+
 # RP BI Decoder ctrl via /dev/mem: BAR0 + 0x1000 (cachemem), the
 # BI Decoder capability (ID 0xC) located through the cap array
 # rather than a hardcoded offset. Empty output = readback
