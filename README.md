@@ -14,7 +14,7 @@ QEMU knobs skip themselves when the binary lacks them.
 
 ## Topologies
 
-Twenty-six topology scripts under `topos/`, each varying one axis so the
+Twenty-seven topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated (t26 is intentionally unused - see
 [topologies.md](topologies.md)).
 
@@ -48,6 +48,7 @@ Per-suite QEMU topology diagrams live in [topologies.md](topologies.md).
 | **t24** | Firmware-adopted BI paths via `x-committed=hdm-db` / `x-bi-enabled` / `x-bi-committed` / `x-bi-fw-committed` / `x-bi-rt-committed` (host-driven, multi-boot) | Adoption as a path property: a firmware-enabled direct-attach device adopts with zero commit cycles and untouched registers; a device firmware did NOT enable declines staged-committed DSP/RT state and runs both commits with unchanged register values (Table 8-152/8-156); a transit DSP mis-staged Enable is corrected to Forward and committed. Scenarios 1-2 verify teardown through the adopted bookkeeping on unbind. Two further boots stage a cascade firmware brought up end to end: with every level correct and committed, adoption runs the whole way up for zero commits at either switch level; leaving the inner route table uncommitted kills adoption at the adjacent DSP and forces the transit DSP above it - adoptable on its own terms - to commit anyway (4 commits, not 2). Per-scenario SKIPs when QEMU lacks the staging knobs. |
 | **t25** | Multi-level switch invariants: shared transit DSP, transit commit fault, three levels (host-driven, multi-boot) | Table 7-93/7-97 cascade routing invariants by register readback: a transit DSP shared by two endpoints holds Forward until the last teardown (`nr_bi`) with one commit edge per device (Table 8-152/8-156); a commit fault at the transit level unwinds the already-enabled adjacent DSP (measured, not inferred); a 3-level cascade lands roles by position with caps/commits scaling to depth. SKIPs the fault scenario when QEMU lacks `x-bi-commit-fault`. |
 | **t27** | Direct-attach BI topology, reset driven through the kernel's sysfs `reset` (host-driven, four boots) | BI state across a device reset. With no region committed the emulated reset clears the endpoint's BI Decoder Control (`0x2` -> `0x0`) while the Root Port's programming is untouched, and the kernel says nothing: `cxlds->bi` goes stale against BI Enable=0, because `cxl_reset_done()` keys its detection off a previously committed decoder. The contrast boot commits an HDM-DB region first, where that decoder-loss detection does fire. The kernel's `.reset_done` compares `cxlds->bi` against the hardware and fails closed ("BI disabled by reset"), asserted hard - as is the post-reset unbind, which must unwind the dport refcounts quietly despite the invalidated flag. With the flag failed closed, a subsequent HDM-DB region attach must refuse ("BI not enabled on device"), so the fail-closed path is asserted at the region boundary, not just at the warning. An FLR leg self-SKIPs until qemu's cxl-type3 advertises DEVCAP FLR, written hardware-first (warn iff the register was wiped) so it activates correctly under either FLR model. Recovery is walked end to end: a rebind re-runs the enable path and the once-refused attach commits again. A switch scenario proves the dports above the reset boundary keep their programming and still unwind fully at unbind despite the invalidated flag. Verified discriminating: the invalidation assertions fail against a kernel without the fix. |
+| **t28** | Direct-attach BI topology, AER Uncorrectable Fatal injected into the endpoint via qemu HMP `pcie_aer_inject_error` (host-driven, two boots) | BI across the AER recovery flow, which never touches `.reset_prepare`/`.reset_done` (`PCI_RESET_NO_RESTORE`): `cxl_error_detected()` bounces the memdev driver before the link reset - BI comes down orderly through devres, decoders first - and `cxl_slot_reset()` recovers with `device_attach()`, re-running the BI enable path from scratch (dmesg chain + register readbacks + a fresh HDM-DB region committing `bi=1`). A live user-created region is detached and decommitted by the bounce, never deleted. Premise-SKIPs when the guest kernel lacks CONFIG_PCIEAER or CONFIG_CXL_RAS (kallsyms probe) or qemu rejects the injection; boots with `pcie_ports=native`. |
 
 ## Configuration
 
@@ -122,6 +123,14 @@ Failures map to specific root causes:
 
 ## Known limitations
 
+- t28 surfaces a pre-existing upstream lockdep: AER recovery takes
+  `pci_bus_sem` (pci_walk_bus) then the memdev lock (cxl_error_detected),
+  inverting the probe-side memdev -> port -> pci_bus_sem order. No BI
+  code in any chain; the suite reports it as a TAP diagnostic and fails
+  only on any other splat. The guest kernel needs CONFIG_PCIEAER and
+  CONFIG_CXL_RAS (which needs ACPI_APEI_GHES) for the bounce path to
+  exist at all - without them cxl_error_detected is a stub and recovery
+  silently degrades to a bare link reset.
 - No BISnp/BIRsp emulation in QEMU. Commit-timeout injection has no
   QEMU knob either: t21 stages it with a local QEMU modification that
   latches the BI commit past the advertised 2s timeout, and records

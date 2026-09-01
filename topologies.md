@@ -320,6 +320,28 @@ would have no legitimate occupant. `x-committed` cannot stage such a
 decoder either - it is binary, setting either the BI bit or the
 host-only bit, never leaving both clear.
 
+## t28 — AER fatal-error recovery (two boots)
+
+```
+pxb-cxl (cxl.1)
+└─ cxl-rp rp0            AER cap 0x100, MSI -> guest AER irq thread
+   └─ cxl-type3 mem0     AER cap 0x200, injection target (MALF_TLP)
+```
+
+t27's shape, driven through the other recovery flow. The injected
+Uncorrectable Fatal lands the guest in pcie_do_recovery(io_frozen):
+cxl_error_detected() bounces the memdev driver before aer_root_reset's
+secondary bus reset, so BI comes down through the normal devres
+cascade (decoders first) while the device is still up, the wipe hits
+an already-torn-down path, and cxl_slot_reset() recovers with
+device_attach() - the enable path re-runs from scratch. Since the
+reset uses PCI_RESET_NO_RESTORE, .reset_prepare/.reset_done never run:
+cxl_bi_reset_detected() has no role here by construction, and the
+suite asserts that absence. Boot 2 stages a committed HDM-DB region
+first: the bounce detaches and decommits it (a user-created region is
+never deleted by the kernel), and a fresh region commits after
+recovery.
+
 ## t27 — BI across a device reset (four boots)
 
 ```
