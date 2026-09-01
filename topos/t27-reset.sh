@@ -191,6 +191,12 @@ if [ "$WIPED" != 1 ]; then
 	skip "no-region: refusal names the device gate"
 	skip "no-region: unbind quiet after invalidation"
 	skip "no-region: post-reset unbind unwinds the RP"
+	skip "rebind: endpoint re-probed"
+	skip "rebind: BI re-enabled from scratch"
+	skip "rebind: endpoint BI Enable back in hardware"
+	skip "rebind: RP re-programmed Enable"
+	skip "rebind: HDM-DB region commits again"
+	skip "rebind: endpoint bi=1"
 else
 	if grep -q "BI disabled by reset" <<<"$dm"; then
 		ok "no-region: kernel invalidates cxlds->bi"
@@ -250,6 +256,75 @@ else
 		ok "no-region: post-reset unbind unwinds the RP"
 	else
 		fail "no-region: post-reset unbind unwinds the RP ($rp2)"
+	fi
+	# Recovery is a rebind, per the reset policy the kernel already
+	# follows for decoders: no reprogramming in the handler, the
+	# enable path re-runs from scratch at probe. The attach the
+	# invalidated flag refused above must now work end to end.
+	g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+	mem2=""
+	for i in $(seq 1 60); do
+		mem2=$(g "ls /sys/bus/pci/devices/$ep 2>/dev/null" | \
+			grep '^mem' | head -1)
+		[ -n "$mem2" ] && break
+	done
+	if [ -n "$mem2" ]; then
+		ok "rebind: endpoint re-probed ($mem2)"
+	else
+		fail "rebind: endpoint re-probed"
+	fi
+	# dmesg was cleared before the reset, so the only enable this
+	# window can hold is the rebind's own; the register readback
+	# does not depend on dyndbg being enabled in the guest.
+	dm=$(g dmesg)
+	if grep -q "BI requests enabled" <<<"$dm"; then
+		ok "rebind: BI re-enabled from scratch"
+	else
+		fail "rebind: BI re-enabled from scratch"
+	fi
+	ec2=$(bi_ctrl "$ep")
+	if [ -z "$ec2" ]; then
+		skip "rebind: endpoint BI Enable back in hardware (no /dev/mem)"
+	elif [ $(( ec2 & 0x2 )) != 0 ]; then
+		ok "rebind: endpoint BI Enable back in hardware"
+	else
+		fail "rebind: endpoint BI Enable back in hardware ($ec2)"
+	fi
+	rp3=$(bi_ctrl "$rp")
+	if [ -z "$rp3" ]; then
+		skip "rebind: RP re-programmed Enable (no /dev/mem)"
+	elif [ $(( rp3 & 0x3 )) = 2 ]; then
+		ok "rebind: RP re-programmed Enable"
+	else
+		fail "rebind: RP re-programmed Enable ($rp3)"
+	fi
+	dec2=$(g "for e in /sys/bus/cxl/devices/endpoint*; do
+			[ \"\$(basename \$(readlink -f \$e/uport))\" = $mem2 ] &&
+				basename \$(ls -d \$e/decoder*.0) && break
+		done")
+	region2=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+	g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+	   echo $region2 > \$CXL/$rd/create_ram_region;
+	   R=\$CXL/$region2;
+	   echo 256 > \$R/interleave_granularity;
+	   echo 1 > \$R/interleave_ways;
+	   echo \$sz > \$R/size;
+	   echo 0 > \$CXL/$dec2/dpa_size 2>/dev/null;
+	   echo ram > \$CXL/$dec2/mode 2>/dev/null;
+	   echo \$sz > \$CXL/$dec2/dpa_size;
+	   echo $dec2 > \$R/target0;
+	   echo 1 > \$R/commit" >/dev/null
+	if [ "$(g "cat /sys/bus/cxl/devices/$region2/commit" 2>/dev/null)" = 1 ]
+	then
+		ok "rebind: HDM-DB region commits again"
+	else
+		fail "rebind: HDM-DB region commits again"
+	fi
+	if [ "$(g "cat /sys/bus/cxl/devices/$dec2/back_invalidate" 2>/dev/null)" = 1 ]
+	then
+		ok "rebind: endpoint bi=1"
+	else
+		fail "rebind: endpoint bi=1"
 	fi
 fi
 
@@ -377,5 +452,75 @@ else
 	fi
 fi
 g dmesg > "$OUT/t27-flr.dmesg" 2>/dev/null
+
+# --- scenario 4: reset below a switch --------------------------------
+# The bus reset lands on the endpoint's bus, so the DSP and RP above
+# keep their programming and their nr_bi. Invalidation must still
+# fire, and the later unbind must unwind BOTH levels despite the
+# invalidated flag - the multi-level form of the leak the
+# unconditional dealloc exists to prevent.
+launch_qemu \
+  -object memory-backend-ram,id=m0,size=1G \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on \
+  -device cxl-type3,bus=dsp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+if wait_for_guest 180; then
+	ok "switch: guest booted"
+else
+	fail "switch: guest booted"; exit 1
+fi
+path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+dsp=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+rp=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+echo "# switch: reset_method='$(g "cat /sys/bus/pci/devices/$ep/reset_method")'"
+g "dmesg -C" >/dev/null
+if g "echo 1 > /sys/bus/pci/devices/$ep/reset"; then
+	ok "switch: reset issued through the kernel"
+else
+	fail "switch: reset issued through the kernel"; exit 1
+fi
+dm=$(g dmesg)
+ec=$(bi_ctrl "$ep")
+if [ -z "$ec" ] || [ $(( ec & 0x2 )) != 0 ]; then
+	for i in 1 2 3 4 5 6; do
+		skip "switch: post-reset state (premise absent: ctrl='$ec')"
+	done
+else
+	ok "switch: hardware cleared endpoint BI"
+	if grep -q "BI disabled by reset" <<<"$dm"; then
+		ok "switch: kernel invalidates cxlds->bi"
+	else
+		fail "switch: kernel invalidates cxlds->bi"
+	fi
+	# levels above the reset boundary keep their programming
+	dctl=$(bi_ctrl "$dsp"); rctl=$(bi_ctrl "$rp")
+	[ $(( dctl & 0x3 )) = 2 ] && ok "switch: DSP keeps Enable" ||
+		fail "switch: DSP keeps Enable ($dctl)"
+	[ $(( rctl & 0x3 )) = 1 ] && ok "switch: RP keeps Forward" ||
+		fail "switch: RP keeps Forward ($rctl)"
+	# and the invalidated flag must not leak either level
+	g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+	for i in $(seq 1 30); do
+		g "test -e /sys/bus/pci/devices/$ep/driver" || break
+	done
+	dctl2=$(bi_ctrl "$dsp"); rctl2=$(bi_ctrl "$rp")
+	[ $(( dctl2 & 0x3 )) = 0 ] && ok "switch: unbind unwinds the DSP" ||
+		fail "switch: unbind unwinds the DSP ($dctl2)"
+	[ $(( rctl2 & 0x3 )) = 0 ] && ok "switch: unbind unwinds the RP" ||
+		fail "switch: unbind unwinds the RP ($rctl2)"
+fi
+dm=$(g dmesg)
+grep -qE "WARNING:|BUG:" <<<"$dm" &&
+	fail "switch: no splat" || ok "switch: no splat"
+if [ "$(grep -c 'CXL BI oracle' "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
+	ok "switch: qemu BI oracle silent"
+else
+	fail "switch: qemu BI oracle silent"
+fi
+g dmesg > "$OUT/t27-switch.dmesg" 2>/dev/null
 
 exit $((FAIL != 0))

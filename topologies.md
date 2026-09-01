@@ -320,7 +320,7 @@ would have no legitimate occupant. `x-committed` cannot stage such a
 decoder either - it is binary, setting either the BI bit or the
 host-only bit, never leaving both clear.
 
-## t27 — BI across a device reset (two boots)
+## t27 — BI across a device reset (four boots)
 
 ```
 pxb-cxl (cxl.1)
@@ -334,5 +334,22 @@ was wiped while the dport above still points at it" directly
 observable. Reset is issued through the kernel (`/sys/bus/pci/devices/
 <ep>/reset`, method `cxl_bus`) rather than a raw setpci poke, so the
 `pci_error_handlers` `.reset_prepare`/`.reset_done` path actually runs.
-Boot 1 resets with nothing committed; boot 2 commits an HDM-DB region
-first.
+Boot 1 resets with nothing committed, then walks the whole recovery
+arc: the invalidated flag refuses an HDM-DB attach, unbind unwinds the
+RP anyway, and a rebind re-runs the enable path from scratch until a
+region commits again. Boot 2 commits an HDM-DB region first. Boot 3 is
+the FLR arm (self-SKIPs until qemu's cxl-type3 advertises DEVCAP FLR).
+Boot 4 moves the device below a switch:
+
+```
+pxb-cxl (cxl.1)
+└─ cxl-rp rp0            RP  → Forward  (above the reset boundary)
+   └─ cxl-upstream us0
+      └─ cxl-downstream dsp0   DSP → Enable   (above the reset boundary)
+         └─ cxl-type3 mem0     (hdm-db)       reset target
+```
+
+The bus reset lands on the endpoint's bus only, so both dports above
+keep their programming and their nr_bi across it - and the later
+unbind must unwind both levels despite the invalidated cxlds->bi,
+the multi-level form of the leak the unconditional dealloc prevents.
