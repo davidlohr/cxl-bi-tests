@@ -230,20 +230,24 @@ else
 		else
 			fail "fresh-dev: DSP role bits wrong ($dctrl)"
 		fi
-		if [ $(( dctrl & 0x4 )) = 4 ]; then
+		# The staged Commit bit cannot witness this: firmware
+		# presents it already set (Table 8-158 ties Committed to
+		# the last 0->1 of it). The kernel names the dport it
+		# commits, so use that instead.
+		if grep -q "pcieport $dsp: BI-ID commit wait" <<<"$dm"; then
 			ok "fresh-dev: DSP commit sequence ran"
 		else
-			fail "fresh-dev: DSP commit skipped ($dctrl)"
+			fail "fresh-dev: DSP commit skipped"
 		fi
 		if [ $(( dsts & 0x1 )) = 1 ]; then
 			ok "fresh-dev: DSP committed"
 		else
 			fail "fresh-dev: DSP not committed ($dsts)"
 		fi
-		if [ $(( rtctrl & 0x1 )) = 1 ]; then
+		if grep -q "cxl_port port.*: BI-ID commit wait" <<<"$dm"; then
 			ok "fresh-dev: RT commit sequence ran"
 		else
-			fail "fresh-dev: RT commit skipped ($rtctrl)"
+			fail "fresh-dev: RT commit skipped"
 		fi
 		if [ $(( rtsts & 0x1 )) = 1 ]; then
 			ok "fresh-dev: RT committed"
@@ -340,10 +344,10 @@ else
 		else
 			fail "wrong-role: transit role bits wrong ($c0)"
 		fi
-		if [ $(( c0 & 0x4 )) = 4 ]; then
+		if grep -q "pcieport $dsp0: BI-ID commit wait" <<<"$dm"; then
 			ok "wrong-role: transit correction committed"
 		else
-			fail "wrong-role: transit correction not committed ($c0)"
+			fail "wrong-role: transit correction not committed"
 		fi
 		if [ $(( s0 & 0x1 )) = 1 ]; then
 			ok "wrong-role: transit committed status"
@@ -363,6 +367,107 @@ else
 	fi
 	oracle_silent "wrong-role"
 	g dmesg > "$OUT/t24-wrong-role.dmesg" 2>/dev/null
+fi
+
+# --- scenarios 4-5: a path firmware brought up behind switches -------
+# x-bi-enabled sets only the endpoint's BI Enable, so unlike
+# x-committed it composes with any topology. With the ports above
+# staged for the role their position calls for, this is a cascade
+# firmware enabled end to end - the one shape that seeds adoption
+# true deeper than a single dport.
+#
+#   4. fw-path: every level correct and committed. Adoption runs the
+#      whole way up: no commit anywhere, at either switch level.
+#   5. fw-partial: identical but the INNER route table is left
+#      uncommitted. Adoption dies at the adjacent DSP, and the transit
+#      DSP above it - staged perfectly, and adoptable on its own
+#      terms - must still program and commit, because from a failed
+#      level upward the driver is enabling something new (Table 8-152,
+#      Table 8-156). Without that rule this boot commits twice instead
+#      of four times.
+launch_fw() { # launch_fw <inner-usp-extra>
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-fw-committed=on \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on$1 \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+}
+
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-bi-enabled" ||
+   ! "$QEMU" -device cxl-downstream,help 2>/dev/null | \
+		grep -q "x-bi-fw-committed"; then
+	for i in $(seq 1 9); do
+		skip "fw-path: qemu lacks x-bi-enabled/x-bi-fw-committed"
+	done
+else
+	launch_fw ",x-bi-rt-committed=on" || { fail "fw-path: launch"; exit 1; }
+	if wait_for_guest 180; then
+		ok "fw-path: guest booted"
+	else
+		fail "fw-path: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	if grep -q "adopting firmware-enabled BI" <<<"$dm"; then
+		ok "fw-path: endpoint adopted"
+	else
+		fail "fw-path: endpoint adopted"
+	fi
+	nfw=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+	if [ "$nfw" = 0 ]; then
+		ok "fw-path: zero commit cycles behind two switches"
+	else
+		fail "fw-path: zero commit cycles (got $nfw)"
+	fi
+	if grep -q "BI setup failed" <<<"$dm"; then
+		fail "fw-path: no setup failure"
+	else
+		ok "fw-path: no setup failure"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	adj=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	read -r _ actl _ <<<"$(bi_regs "$adj" 0xC)"
+	read -r _ tctl _ <<<"$(bi_regs "$transit" 0xC)"
+	if [ -z "$actl" ] || [ -z "$tctl" ]; then
+		skip "fw-path: adjacent kept Enable (no /dev/mem)"
+		skip "fw-path: transit kept Forward (no /dev/mem)"
+	else
+		[ $(( actl & 0x3 )) = 2 ] && ok "fw-path: adjacent kept Enable" ||
+			fail "fw-path: adjacent role changed ($actl)"
+		[ $(( tctl & 0x3 )) = 1 ] && ok "fw-path: transit kept Forward" ||
+			fail "fw-path: transit role changed ($tctl)"
+	fi
+	oracle_silent "fw-path"
+	g dmesg > "$OUT/t24-fw-path.dmesg" 2>/dev/null
+
+	launch_fw "" || { fail "fw-partial: launch"; exit 1; }
+	if wait_for_guest 180; then
+		ok "fw-partial: guest booted"
+	else
+		fail "fw-partial: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	npart=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+	# adjacent decoder + inner RT, then transit decoder + outer RT
+	if [ "$npart" -ge 4 ]; then
+		ok "fw-partial: failed level forces commits above it ($npart)"
+	else
+		fail "fw-partial: transit adopted despite a failed level below ($npart)"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	if grep -q "pcieport $transit: BI-ID commit wait" <<<"$dm"; then
+		ok "fw-partial: the transit level itself committed"
+	else
+		fail "fw-partial: the transit level itself committed"
+	fi
+	oracle_silent "fw-partial"
+	g dmesg > "$OUT/t24-fw-partial.dmesg" 2>/dev/null
 fi
 
 exit $((FAIL != 0))
