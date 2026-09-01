@@ -19,10 +19,11 @@
 #      memory regions removal"), showing the kernel notices the
 #      decoder loss but still says nothing about BI.
 #
-# The BI-invalidation checks are conditional on the kernel actually
-# implementing it: they look for the diagnostic and SKIP with an
-# explicit message when absent, so this suite is green against a
-# kernel without the fix and becomes a real assertion once it lands.
+# The kernel compares cxlds->bi against the hardware in .reset_done
+# (cxl_bi_reset_detected) and fails closed, and cxl_bi_dealloc()
+# unwinds unconditionally so the invalidated flag cannot leak the
+# dport refcounts. Both are asserted hard; only the wipe premise
+# itself (does the emulated reset clear the register) still SKIPs.
 # The reset is driven through the kernel's own sysfs reset so the
 # pci_error_handlers .reset_prepare/.reset_done path runs; a raw
 # setpci poke would bypass it entirely.
@@ -182,19 +183,40 @@ else
 	WIPED=0
 fi
 
-# The BI invalidation itself. Conditional so a kernel without it is a
-# documented SKIP rather than a red suite.
+# The BI invalidation: hardware lost BI Enable behind the driver's
+# back, so .reset_done must notice and fail the software state closed.
 if [ "$WIPED" != 1 ]; then
 	skip "no-region: kernel invalidates cxlds->bi (premise absent)"
-	skip "no-region: endpoint reports bi=0 after the reset"
-elif grep -q "BI disabled by reset" <<<"$dm"; then
-	ok "no-region: kernel invalidates cxlds->bi"
-	bi=$(g 'cat /sys/bus/cxl/devices/endpoint*/decoder*.0/back_invalidate')
-	[ "$bi" = 0 ] && ok "no-region: endpoint reports bi=0 after the reset" ||
-		fail "no-region: endpoint reports bi=0 (got '$bi')"
+	skip "no-region: unbind quiet after invalidation"
+	skip "no-region: post-reset unbind unwinds the RP"
 else
-	skip "no-region: kernel lacks BI reset invalidation (cxlds->bi now stale vs BI Enable=0)"
-	skip "no-region: endpoint reports bi=0 after the reset (kernel lacks invalidation)"
+	if grep -q "BI disabled by reset" <<<"$dm"; then
+		ok "no-region: kernel invalidates cxlds->bi"
+	else
+		fail "no-region: kernel invalidates cxlds->bi"
+	fi
+	# The invalidated flag must not leak the dport refcounts:
+	# dealloc always unwinds, so the unbind still clears the RP,
+	# and quietly - the endpoint disable sees hardware and
+	# software agreeing on off.
+	g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+	for i in $(seq 1 30); do
+		g "test -e /sys/bus/pci/devices/$ep/driver" || break
+	done
+	dm=$(g dmesg)
+	if grep -q "BI already disabled in hardware" <<<"$dm"; then
+		fail "no-region: unbind quiet after invalidation"
+	else
+		ok "no-region: unbind quiet after invalidation"
+	fi
+	rp2=$(bi_ctrl "$rp")
+	if [ -z "$rp2" ]; then
+		skip "no-region: post-reset unbind unwinds the RP (no /dev/mem)"
+	elif [ $(( rp2 & 0x3 )) = 0 ]; then
+		ok "no-region: post-reset unbind unwinds the RP"
+	else
+		fail "no-region: post-reset unbind unwinds the RP ($rp2)"
+	fi
 fi
 
 if grep -qE "WARNING:|BUG:" <<<"$dm"; then
@@ -271,7 +293,7 @@ fi
 if grep -q "BI disabled by reset" <<<"$dm"; then
 	ok "with-region: BI invalidation reported alongside"
 else
-	skip "with-region: kernel lacks BI reset invalidation"
+	fail "with-region: BI invalidation reported alongside"
 fi
 if grep -qE "BUG:" <<<"$dm"; then
 	fail "with-region: no BUG across the reset"
