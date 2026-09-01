@@ -418,11 +418,14 @@ g dmesg > "$OUT/t27-with-region.dmesg" 2>/dev/null
 
 # --- scenario 3: FLR must not trip the invalidation ------------------
 # An FLR leaves the CXL.cache/mem component registers alone, so
-# .reset_done should find BI Enable still set and stay silent. qemu's
-# cxl-type3 does not advertise DEVCAP FLR today, so this self-SKIPs;
-# the assertion is written hardware-first (warn iff the register was
-# actually wiped) so a model that wires FLR to a full device reset
-# still passes for the right reason once FLR appears.
+# .reset_done should find BI Enable still set and stay silent. The
+# assertion is written hardware-first (warn iff the register was
+# actually wiped) so it lands correctly under either FLR model, and
+# self-SKIPs on a qemu whose cxl-type3 does not advertise DEVCAP FLR.
+# Leg 2 repeats it with a committed HDM-DB region, the case where the
+# two reset flavors visibly diverge: the SBR of scenario 2 wipes the
+# decoders and trips the decoder-loss taint, while an FLR must leave
+# region, decoders and BI all standing.
 launch_t27 || { fail "flr: launch"; exit 1; }
 if wait_for_guest 180; then
 	ok "flr: guest booted"
@@ -456,6 +459,79 @@ else
 	fi
 fi
 g dmesg > "$OUT/t27-flr.dmesg" 2>/dev/null
+
+# Same reset, now with a live HDM-DB region: nothing may come down.
+# Its own boot: leg 1 leaves BI down on a qemu whose FLR wipes, and a
+# silence assertion on a guest with nothing left to lose is vacuous.
+launch_t27 || { fail "flr-region: launch"; exit 1; }
+if wait_for_guest 180; then
+	ok "flr-region: guest booted"
+else
+	fail "flr-region: guest booted"; exit 1
+fi
+path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+rd=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+		[ -e "$d/cap_back_invalidate" ] || continue
+		[ "$(cat $d/cap_back_invalidate)" = 1 ] && basename $d && break
+	done')
+region=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+dec=$(g 'basename $(ls -d /sys/bus/cxl/devices/endpoint*/decoder*.0 | head -1)')
+g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+   echo $region > \$CXL/$rd/create_ram_region;
+   R=\$CXL/$region;
+   echo 256 > \$R/interleave_granularity;
+   echo 1 > \$R/interleave_ways;
+   echo \$sz > \$R/size;
+   echo 0 > \$CXL/$dec/dpa_size 2>/dev/null;
+   echo ram > \$CXL/$dec/mode 2>/dev/null;
+   echo \$sz > \$CXL/$dec/dpa_size;
+   echo $dec > \$R/target0;
+   echo 1 > \$R/commit" >/dev/null
+if [ "$(g "cat /sys/bus/cxl/devices/$region/commit" 2>/dev/null)" = 1 ]; then
+	ok "flr-region: HDM-DB region committed"
+else
+	fail "flr-region: HDM-DB region committed"
+fi
+if ! g "echo flr > /sys/bus/pci/devices/$ep/reset_method"; then
+	for i in 1 2 3 4 5; do
+		skip "flr-region: post-FLR state (device does not advertise FLR)"
+	done
+else
+	g "dmesg -C" >/dev/null
+	g "echo 1 > /sys/bus/pci/devices/$ep/reset" >/dev/null
+	ok "flr-region: FLR issued with the region live"
+	dm=$(g dmesg)
+	ec=$(bi_ctrl "$ep")
+	# The decoder-loss detection keys off a committed decoder, so an
+	# FLR that preserved it must leave that path silent too - the
+	# same register survival the BI check sees, from the other side.
+	if grep -q "SBR happened without memory regions removal" <<<"$dm"; then
+		fail "flr-region: decoder-loss detection stays silent"
+	else
+		ok "flr-region: decoder-loss detection stays silent"
+	fi
+	if grep -q "BI disabled by reset" <<<"$dm"; then
+		fail "flr-region: BI invalidation stays silent"
+	else
+		ok "flr-region: BI invalidation stays silent"
+	fi
+	if [ -z "$ec" ]; then
+		skip "flr-region: BI Enable survived (no /dev/mem)"
+	elif [ $(( ec & 0x2 )) != 0 ]; then
+		ok "flr-region: BI Enable survived the FLR"
+	else
+		fail "flr-region: BI Enable wiped by the FLR ($ec)"
+	fi
+	c=$(g "cat /sys/bus/cxl/devices/$region/commit" 2>/dev/null)
+	b=$(g "cat /sys/bus/cxl/devices/$dec/back_invalidate" 2>/dev/null)
+	if [ "$c" = 1 ] && [ "$b" = 1 ]; then
+		ok "flr-region: region still committed, bi=1"
+	else
+		fail "flr-region: region survived (commit=$c bi=$b)"
+	fi
+fi
+g dmesg > "$OUT/t27-flr-region.dmesg" 2>/dev/null
 
 # --- scenario 4: reset below a switch --------------------------------
 # The bus reset lands on the endpoint's bus, so the DSP and RP above

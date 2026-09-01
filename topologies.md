@@ -342,7 +342,7 @@ first: the bounce detaches and decommits it (a user-created region is
 never deleted by the kernel), and a fresh region commits after
 recovery.
 
-## t27 — BI across a device reset (four boots)
+## t27 — BI across a device reset (five boots)
 
 ```
 pxb-cxl (cxl.1)
@@ -359,10 +359,14 @@ observable. Reset is issued through the kernel (`/sys/bus/pci/devices/
 Boot 1 resets with nothing committed, then walks the whole recovery
 arc: the invalidated flag refuses an HDM-DB attach, unbind unwinds the
 RP anyway, and a rebind re-runs the enable path from scratch until a
-region commits again. Boot 2 commits an HDM-DB region first. Boot 3 is
-the FLR arm, live against the faithful-FLR qemu: DEVCAP FLR advertised,
-CXL.cache/mem component registers preserved, so the reset that must
-not wipe BI measurably does not - and the invalidation stays silent.
+region commits again. Boot 2 commits an HDM-DB region first. Boots 3 and 4 are
+the FLR arms, live against the faithful-FLR qemu: DEVCAP FLR
+advertised, CXL.cache/mem component registers preserved, so the reset
+that must not wipe BI measurably does not - and the invalidation stays
+silent. Boot 4 repeats it with a committed HDM-DB region, where the
+two flavors diverge: the SBR of boot 2 wipes the decoders and trips
+the decoder-loss taint, while the FLR leaves region, decoders and BI
+all standing.
 Boot 4 moves the device below a switch:
 
 ```
