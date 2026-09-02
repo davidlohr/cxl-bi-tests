@@ -209,7 +209,7 @@ if ! wait_recovery; then
 	exit 1
 fi
 
-grep -q "Uncorrectable (Fatal) error message received" <<<"$dm" &&
+grep -qi "Uncorrectable (Fatal) error message received" <<<"$dm" &&
 	ok "aer: root port saw the fatal error" ||
 	fail "aer: root port saw the fatal error"
 grep -q "frozen state error detected, disable CXL.mem" <<<"$dm" &&
