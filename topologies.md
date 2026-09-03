@@ -333,6 +333,26 @@ its root decoder carries cap_type2 without cap_back_invalidate, and
 can_create_ram() offers no create attr for DEVMEM-without-BI, so the
 window is enumerable but not yet usable.
 
+## t29 — mixed Type 2 / Type 3 (one boot)
+
+```
+pxb-cxl (cxl.1)
+|- rp0 - us0 -+- dsp0 - cxl-type3        (hdm-db, host+dev)
+|            `- dsp1 - cxl-accel (type2) (hdm-db, dev-only)
+`- rp1 - us1 -+- dsp2 - cxl-accel (type2)
+             `- dsp3 - cxl-type3
+```
+
+Two switches, each carrying one Type 2 accelerator (device-coherent
+only) and one Type 3 expander (host+dev) behind a single BI window -
+the first suite where BI runs over a topology of mixed device
+coherency. All four commit their own HDM-DB region; a 2-way HDM-DB
+region then interleaves a Type 2 and a Type 3 target under one switch
+(both bi=1, both target_type accelerator, positions computed by
+cxl_calc_interleave_pos), and teardown reverts every decoder cleanly.
+Both switch groups happen to carry one device of each class, so the
+mixed-pair selection for the interleave leg is topology-robust.
+
 ## t27 — BI across a device reset (five boots)
 
 ```
