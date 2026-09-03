@@ -39,6 +39,13 @@ trap finish EXIT
 g() { guest_ssh "$@" 2>/dev/null; }
 
 echo "# CXL BI type2 suite t26"
+# Graceful skip on a qemu without the type2 model: probe the device
+# list up front rather than letting the launch die into the boot
+# timeout.
+if ! "$QEMU" -device help 2>/dev/null | grep -q '"cxl-accel"'; then
+	skip "qemu lacks the cxl-accel device - suite reserved"
+	exit 0
+fi
 launch_qemu \
   -object memory-backend-ram,id=m0,size=1G \
   -object memory-backend-ram,id=m1,size=1G \
@@ -48,13 +55,16 @@ launch_qemu \
   -device cxl-accel,bus=rp0,volatile-memdev=m0,id=accel0,x-256b-flit=on,hdm-db=on \
   -device cxl-type3,bus=rp1,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on \
   -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on,cxl-fmw.1.targets.0=cxl.1,cxl-fmw.1.size=4G,cxl-fmw.1.interleave-granularity=4k,cxl-fmw.2.targets.0=cxl.1,cxl-fmw.2.size=4G,cxl-fmw.2.interleave-granularity=4k,cxl-fmw.2.host-only=off
-if [ $? -ne 0 ]; then
-	skip "qemu lacks cxl-accel (or host-only knob) - suite reserved"
-	exit 0
-fi
 if wait_for_guest 200; then
 	ok "guest booted"
 else
+	# a parameter rejection (e.g. no host-only window knob) is an
+	# unsupported-qemu condition, not a harness failure
+	if grep -qiE "not a valid device|invalid parameter|Property.*not found" \
+			"$RUNDIR/qemu.log" "$CONSOLE_LOG" 2>/dev/null; then
+		skip "qemu rejected the type2 topology - suite reserved"
+		exit 0
+	fi
 	fail "guest booted"; exit 1
 fi
 CXL=/sys/bus/cxl/devices
