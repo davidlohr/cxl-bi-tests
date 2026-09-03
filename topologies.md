@@ -310,37 +310,28 @@ takes nr_bi++, so teardown unwinds it like any other); fresh-dev
 `dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/`rp0`=1. Each scenario's
 unbind walks its counts back to 0.
 
-## t26 — intentionally unused
-
-Reserved for an HDM-D window suite (a CFMWS with bit[0]=1, bit[5]=0 via
-`cxl-fmw.0.host-only=off`), which would cover the endpoint-vs-window
-asymmetry in `cxld_set_type()`. Not buildable today: QEMU models only
-`cxl-type3`, and HDM-D flows belong to Type 2 devices, so the window
-would have no legitimate occupant. `x-committed` cannot stage such a
-decoder either - it is binary, setting either the BI bit or the
-host-only bit, never leaving both clear.
-
-## t28 — AER fatal-error recovery (two boots)
+## t26 — Type 2 accelerator coherency (one boot)
 
 ```
 pxb-cxl (cxl.1)
-└─ cxl-rp rp0            AER cap 0x100, MSI -> guest AER irq thread
-   └─ cxl-type3 mem0     AER cap 0x200, injection target (MALF_TLP)
+|- cxl-rp rp0 - cxl-accel accel0   hdm-db=on, Supported Coherency
+|                                  Models = device-coherent only
+`- cxl-rp rp1 - cxl-type3 mem      host+dev coherency (control)
+fmw0: BI (HDM-DB)   fmw1: default (HDM-H)   fmw2: host-only=off (HDM-D)
 ```
 
-t27's shape, driven through the other recovery flow. The injected
-Uncorrectable Fatal lands the guest in pcie_do_recovery(io_frozen):
-cxl_error_detected() bounces the memdev driver before aer_root_reset's
-secondary bus reset, so BI comes down through the normal devres
-cascade (decoders first) while the device is still up, the wipe hits
-an already-torn-down path, and cxl_slot_reset() recovers with
-device_attach() - the enable path re-runs from scratch. Since the
-reset uses PCI_RESET_NO_RESTORE, .reset_prepare/.reset_done never run:
-cxl_bi_reset_detected() has no role here by construction, and the
-suite asserts that absence. Boot 2 stages a committed HDM-DB region
-first: the bounce detaches and decommits it (a user-created region is
-never deleted by the kernel), and a fresh region commits after
-recovery.
+The cxl-accel qemu device (a type3 subtype) advertises
+device-coherent-only HDM, as an accelerator that computes on its
+memory must. The suite pins both arms of the region attach coherency
+gate: the accelerator commits an HDM-DB region (back_invalidate=1,
+target_type inherited as accelerator) and is refused an HDM-H attach
+("HDM is device-coherent only") that the type3 control then commits
+on the same window. The reject arm is reachable by no other device
+model - plain type3 advertises host+dev, x-coherency-unknown nothing.
+The HDM-D window (host-only=off, no BI) documents today's kernel gap:
+its root decoder carries cap_type2 without cap_back_invalidate, and
+can_create_ram() offers no create attr for DEVMEM-without-BI, so the
+window is enumerable but not yet usable.
 
 ## t27 — BI across a device reset (five boots)
 

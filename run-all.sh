@@ -182,6 +182,7 @@ declare -A TOPO=(
 	[t23]=t23-commit-fault.sh
 	[t24]=t24-adopt.sh
 	[t25]=t25-multiswitch.sh
+	[t26]=t26-type2.sh
 	[t27]=t27-reset.sh
 	[t28]=t28-aer.sh
 )
@@ -190,12 +191,12 @@ declare -A TOPO=(
 # guest at all); t16 orchestrates its own multi-boot x-committed
 # scenarios; t17 interleaves QMP hotplug with guest checks. run_suite
 # handles them below.
-HOST_ONLY_SUITES=" t13 t16 t17 t23 t24 t25 t27 t28 "
+HOST_ONLY_SUITES=" t13 t16 t17 t23 t24 t25 t26 t27 t28 "
 # Default order: happy paths first, then mixed configs / fail-closed
 # gates, then the deeper topologies, then the guest-less checks. Later
 # suites depend on earlier invariants (region create, root cap_back_invalidate,
 # endpoint bi) already passing.
-ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t21 t22 t18 t16 t17 t23 t24 t25 t27 t28 t13"
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t21 t22 t18 t16 t17 t23 t24 t25 t26 t27 t28 t13"
 
 # No args: run everything. Otherwise run only the named suites, e.g.
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)
