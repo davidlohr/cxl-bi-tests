@@ -12,11 +12,14 @@
 #   2. only a host-only-restricted window (device-coherent=off): the
 #      staging falls back to it, emulating firmware that committed a
 #      device-coherent decoder where the platform declared host-only.
-#      The device and region agree on coherency, so the device gates
+#      The device and region agree on coherency, so the device checks
 #      pass - only the window contradicts, and region assembly must
 #      refuse ("coherency model not permitted by the window"). This is
-#      the TRT axis of the same gate whose BI axis the v7 cover
+#      the TRT axis of the same refusal whose BI axis the v7 cover
 #      letter's "BI decoder in a non-BI window" test exercises.
+#   3. the mirror arm: a cxl-type3 staging a committed host-only
+#      decode (x-committed=hdm-h) with only a device-coherent window
+#      (host-only=off). Same refusal, opposite direction.
 set -o pipefail
 BI_TESTS_DIR=$(dirname "$(readlink -f "$0")")/..
 source "$BI_TESTS_DIR/topo-lib.sh"
@@ -40,7 +43,7 @@ echo "# CXL HDM-D window-restriction suite t30"
 
 if ! "$QEMU" -device help 2>/dev/null | grep -q '"cxl-accel"' ||
    ! "$QEMU" -device cxl-accel,help 2>/dev/null | grep -q "x-committed"; then
-	for i in $(seq 1 11); do
+	for i in $(seq 1 17); do
 		skip "qemu lacks cxl-accel with x-committed"
 	done
 	exit 0
@@ -56,7 +59,7 @@ launch_qemu \
 if ! wait_for_guest 200; then
 	if grep -qiE "x-committed must be|not a valid|invalid parameter" \
 			"$RUNDIR/qemu.log" "$CONSOLE_LOG" 2>/dev/null; then
-		for i in $(seq 1 11); do
+		for i in $(seq 1 17); do
 			skip "qemu cxl-accel lacks the hdm-d flavor"
 		done
 		exit 0
@@ -118,9 +121,9 @@ ok "refusal: guest booted"
 
 dm=$(g dmesg)
 if grep -q "coherency model not permitted by the window" <<<"$dm"; then
-	ok "refusal: window gate refused the staged HDM-D decode"
+	ok "refusal: window refused the staged HDM-D decode"
 else
-	fail "refusal: window gate refused the staged HDM-D decode"
+	fail "refusal: window refused the staged HDM-D decode"
 fi
 region=$(g 'ls -d /sys/bus/cxl/devices/region* 2>/dev/null | head -1')
 if [ -z "$region" ]; then
@@ -136,5 +139,43 @@ fi
 grep -qE "WARNING:|BUG:" <<<"$dm" &&
 	fail "refusal: no splat" || ok "refusal: no splat"
 g dmesg > "$OUT/t30-refusal.dmesg" 2>/dev/null
+
+# --- boot 3: staged HDM-H type3, only a device-coherent window -------
+# The mirror arm: a Type 3 never decodes device-coherent, so its
+# committed HDM-H decode under a window restricted to device-coherent
+# (host-only=off) emulates firmware contradicting the platform in the
+# opposite direction. The picker finds no host-only window and falls
+# back just the same; the same refusal must fire.
+launch_qemu \
+  -object memory-backend-ram,id=m0,size=1G \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2 \
+  -device cxl-type3,bus=rp0,volatile-memdev=m0,id=mem0,x-committed=hdm-h \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.host-only=off
+if ! wait_for_guest 200; then
+	fail "refusal2: guest booted"; exit 1
+fi
+ok "refusal2: guest booted"
+
+dm=$(g dmesg)
+if grep -q "coherency model not permitted by the window" <<<"$dm"; then
+	ok "refusal2: window refused the staged HDM-H decode"
+else
+	fail "refusal2: window refused the staged HDM-H decode"
+fi
+region=$(g 'ls -d /sys/bus/cxl/devices/region* 2>/dev/null | head -1')
+if [ -z "$region" ]; then
+	ok "refusal2: no region assembled"
+else
+	fail "refusal2: no region assembled ($(basename $region))"
+fi
+if grep -q "failed to add to region" <<<"$dm"; then
+	ok "refusal2: discovery reported the refusal"
+else
+	fail "refusal2: discovery reported the refusal"
+fi
+grep -qE "WARNING:|BUG:" <<<"$dm" &&
+	fail "refusal2: no splat" || ok "refusal2: no splat"
+g dmesg > "$OUT/t30-refusal2.dmesg" 2>/dev/null
 
 exit $((FAIL != 0))
