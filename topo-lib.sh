@@ -61,7 +61,10 @@ launch_qemu() {
 		-enable-kvm \
 		-serial file:"$CONSOLE_LOG" \
 		-pidfile "$PIDFILE" \
-		-daemonize
+		-daemonize \
+		9>&-
+	# 9>&- : the daemonized guest must not inherit the suite lock
+	# (fd 9), or a leaked guest blocks every later run on flock.
 }
 
 stop_qemu() {
