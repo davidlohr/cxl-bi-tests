@@ -18,8 +18,11 @@ Thirty-three topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
 Per-suite QEMU topology diagrams live in [docs/topologies.md](docs/topologies.md).
-What the driver supports and refuses, by coherency model, window
-restriction, device class and creation path, is tabulated in
+The rules behind all of it, each quoted from the specification and
+mapped to what the driver does and which suite proves it, are in
+[docs/first-principles.md](docs/first-principles.md). What the driver
+supports and refuses, by coherency model, window restriction, device
+class and creation path, is tabulated in
 [docs/linux-support-matrix.md](docs/linux-support-matrix.md); the plan
 for confirming it on Type 3 hardware is
 [docs/hw-testplan.md](docs/hw-testplan.md).
