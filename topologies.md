@@ -392,3 +392,66 @@ The bus reset lands on the endpoint's bus only, so both dports above
 keep their programming and their nr_bi across it - and the later
 unbind must unwind both levels despite the invalidated cxlds->bi,
 the multi-level form of the leak the unconditional dealloc prevents.
+
+## t31 — eight endpoints under one switch, 4-way and 8-way (one boot)
+
+```
+cxl-fmw.0 (BI, one target)
+└─ pxb-cxl (cxl.1)                 passthrough host bridge
+   └─ cxl-rp rp0                   RP  → Forward, nr_bi=8
+      └─ cxl-upstream us0          USP decoder iw=4, then iw=8, ig=256
+         ├─ cxl-downstream dsp0    DSP → Enable
+         │  └─ cxl-type3 mem0      (hdm-db)   4-way and 8-way member
+         ├─ cxl-downstream dsp1..dsp3          4-way and 8-way members
+         └─ cxl-downstream dsp4..dsp7          8-way members only
+```
+
+The window has one target, so the root decoder is iw=1 and the region
+granularity is free; 256 keeps the USP's eiw/eig inside its 256B
+interleave mask at both widths. The 8-way set is the widest a switch
+decoder takes (eight targets), and the second half of its target list
+lands in TARGET_LIST_HI. The refcount leg unbinds seven of the eight
+endpoints under the shared RP before the last one.
+
+## t32 — two switches under two host bridges, 4-way (one boot)
+
+```
+cxl-fmw.0 (BI, two targets, 4k)    root decoder iw=2, ig=4096
+├─ pxb-cxl (cxl.1)                 window target 0, passthrough
+│  └─ cxl-rp rp0                   RP  → Forward, nr_bi=2
+│     └─ cxl-upstream us0          USP decoder iw=2, ig=8192
+│        ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0
+│        └─ cxl-downstream dsp1 — cxl-type3 mem1   position 2
+└─ pxb-cxl (cxl.2)                 window target 1, passthrough
+   └─ cxl-rp rp1                   RP  → Forward, nr_bi=2
+      └─ cxl-upstream us1          USP decoder iw=2, ig=8192
+         ├─ cxl-downstream dsp2 — cxl-type3 mem2   position 1
+         └─ cxl-downstream dsp3 — cxl-type3 mem3   position 3
+```
+
+Positions are dport-major: position p goes to window target p % 2,
+so consecutive positions alternate host bridges and each USP sees
+every other 4k stripe (ig = 4k x 2). Wiring the targets in plain BDF
+order puts mem1 at position 1, under window target 0, and the attach
+refuses it.
+
+## t33 — two switches under one host bridge, two RPs, 4-way (one boot)
+
+```
+cxl-fmw.0 (BI, one target)         root decoder iw=1
+└─ pxb-cxl (cxl.1)                 HB decoder iw=2, ig=1024 (not passthrough)
+   ├─ cxl-rp rp0 (port 0)          RP  → Forward, nr_bi=2
+   │  └─ cxl-upstream us0          USP decoder iw=2, ig=2048
+   │     ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0
+   │     └─ cxl-downstream dsp1 — cxl-type3 mem1   position 2
+   └─ cxl-rp rp1 (port 1)          RP  → Forward, nr_bi=2
+      └─ cxl-upstream us1          USP decoder iw=2, ig=2048
+         ├─ cxl-downstream dsp2 — cxl-type3 mem2   position 1
+         └─ cxl-downstream dsp3 — cxl-type3 mem3   position 3
+```
+
+Same shape as t32 one level down: with two RPs the host bridge is not
+passthrough and its own HDM decoder carries the first interleave
+level. The one-target window leaves the region granularity free, and
+1k is used so a granularity other than 256 and 4k is exercised through
+three decoder levels.

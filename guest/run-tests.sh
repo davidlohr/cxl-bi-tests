@@ -331,6 +331,58 @@ endpoint_of_mem() { # memN -> endpointX
 	done
 }
 
+# ---------- multi-level interleave helpers (t31-t33) ---------------
+mems_by_bdf() { # memN list in BDF order = window-target / dport order
+	local m
+	for m in $CXL/mem*; do
+		m=$(basename "$m"); echo "$(bdf_for_mem "$m") $m"
+	done | sort | awk '{print $2}'
+}
+port_above() { # <endpointX|portN> [levels] -> the cxl port that many levels up
+	local p=$CXL/$1 i
+	for i in $(seq 1 "${2:-1}"); do p=$(dirname "$(readlink -f "$p")"); done
+	basename "$p"
+}
+bdf_above() { # memN <n> -> BDF of the n-th PCI device above the endpoint
+	readlink -f "$CXL/$1" | awk -F/ -v n="$2" '{print $(NF-1-n)}'
+}
+region_decoder_in_port() { # <portN> <regionX> -> the port decoder serving it
+	local d
+	for d in $CXL/$1/decoder*; do
+		[ -d "$d" ] || continue
+		[ "$(cat "$d/region" 2>/dev/null)" = "$2" ] && \
+			{ basename "$d"; return; }
+	done
+}
+decoder_iw_ig() { # <decoder> -> "iw ig"
+	echo "$(cat "$CXL/$1/interleave_ways") $(cat "$CXL/$1/interleave_granularity")"
+}
+bis() { # <endpoint decoders...> -> concatenated back_invalidate values
+	local d s=""
+	for d in "$@"; do s="$s$(cat "$CXL/$d/back_invalidate")"; done
+	echo "$s"
+}
+delete_regions_under() { # <root decoder>: drop region shells a failed attach left
+	local r
+	for r in $CXL/region*; do
+		[ -d "$r" ] || continue
+		echo 0 > "$r/commit" 2>/dev/null
+		echo "$(basename "$r")" > "$CXL/$1/delete_region" 2>/dev/null
+	done
+}
+wait_ep_bdf() { # <bdf> <passes> -> endpoint decoder once memdev + endpoint exist
+	local i m d
+	for i in $(seq 1 "$2"); do
+		m=$(mem_for_bdf "$1")
+		if [ -n "$m" ]; then
+			d=$(ep_decoder_for_mem "$m")
+			[ -n "$d" ] && { echo "$d"; return 0; }
+		fi
+		sleep 0.5
+	done
+	return 1
+}
+
 # =====================================================================
 echo "# CXL BI guest tests, suite $SUITE, kernel $(uname -r)"
 
@@ -1294,6 +1346,275 @@ t22)	# BI device reporting Unknown coherency models. The kernel must
 	expect_eq "decoder back to expander after destroy" \
 		"$(endpoint_decoder_target_type "$dec")" expander
 	no_region_mismatch_warn
+	;;
+
+# --------------------------------------------------------------- t31
+t31)	# 4-way and 8-way HDM-DB interleave under one switch, then the
+	# RP's nr_bi across seven releases. One-target window: the root
+	# decoder is iw=1 and the region granularity is free (256 here).
+	check_cap_back_invalidate_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	expect_eq "root decoder iw=1 (one-target window)" \
+		"$(cat "$CXL/$rd/interleave_ways")" 1
+	mems=( $(mems_by_bdf) )
+	expect_eq "eight memdevs enumerated" "${#mems[@]}" 8
+	[ "${#mems[@]}" = 8 ] || exit 1
+	decs=()
+	for m in "${mems[@]}"; do decs+=( "$(ep_decoder_for_mem "$m")" ); done
+	usp=$(port_above "$(endpoint_of_mem "${mems[0]}")")
+	usp_bdf=$(bdf_above "${mems[0]}" 2)
+	rp_bdf=$(bdf_above "${mems[0]}" 3)
+	expect_eq "all eight endpoints bi=0 pre-region" "$(bis "${decs[@]}")" 00000000
+
+	# --- 4-way over the first four DSPs.
+	region=$(create_region "$rd" 4 256 "${mems[@]:0:4}")
+	[ -n "$region" ] && ok "create 4-way HDM-DB region" \
+		|| { fail "create 4-way HDM-DB region"; exit 1; }
+	check "commit 4-way HDM-DB region" commit_region "$region"
+	expect_eq "region iw=4 ig=256" "$(decoder_iw_ig "$region")" "4 256"
+	expect_eq "four endpoints bi=1, four idle" "$(bis "${decs[@]}")" 11110000
+	expect_eq "endpoint decoder iw=4 ig=256" "$(decoder_iw_ig "${decs[0]}")" "4 256"
+	sd=$(region_decoder_in_port "$usp" "$region")
+	expect_eq "USP decoder iw=4 ig=256 (4-way)" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "4 256"
+	v=$(creg "$usp_bdf" hdmbi)
+	if [ -z "$v" ]; then skip_qemu_gap 1 "no /dev/mem MMIO for USP HDM readback"
+	else expect_eq "USP committed HDM decoder carries BI (4-way)" "$v" 1; fi
+	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
+	no_setup_failure
+	no_region_mismatch_warn
+	destroy_region "$region" "$rd"
+	expect_eq "all eight bi=0 post-destroy (4-way)" "$(bis "${decs[@]}")" 00000000
+
+	# --- 8-way across every DSP: the USP target list spills into
+	# TARGET_LIST_HI.
+	region=$(create_region "$rd" 8 256 "${mems[@]}")
+	[ -n "$region" ] && ok "create 8-way HDM-DB region" \
+		|| { fail "create 8-way HDM-DB region"; exit 1; }
+	check "commit 8-way HDM-DB region" commit_region "$region"
+	expect_eq "region iw=8 ig=256" "$(decoder_iw_ig "$region")" "8 256"
+	expect_eq "all eight endpoints bi=1 (8-way)" "$(bis "${decs[@]}")" 11111111
+	sd=$(region_decoder_in_port "$usp" "$region")
+	expect_eq "USP decoder iw=8 ig=256 (8-way)" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "8 256"
+	v=$(creg "$usp_bdf" hdmbi)
+	if [ -z "$v" ]; then skip_qemu_gap 1 "no /dev/mem MMIO for USP HDM readback"
+	else expect_eq "USP committed HDM decoder carries BI (8-way)" "$v" 1; fi
+	no_region_mismatch_warn
+	destroy_region "$region" "$rd"
+	expect_eq "all eight bi=0 post-destroy (8-way)" "$(bis "${decs[@]}")" 00000000
+
+	# --- nr_bi beyond two: eight children hold the RP in Forward;
+	# seven releases must not clear it, the eighth must.
+	bdfs=(); for m in "${mems[@]}"; do bdfs+=( "$(bdf_for_mem "$m")" ); done
+	v=$(creg "$rp_bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for RP BI Decoder readback"
+	else
+		expect_eq "RP BI Decoder Forward with eight children" "$((v & 3))" 1
+	fi
+	dmesg -C
+	unbind_bdf() { # <bdf>: unbind cxl_pci and wait for the memdev to go
+		local m i; m=$(mem_for_bdf "$1")
+		echo "$1" > /sys/bus/pci/drivers/cxl_pci/unbind 2>/dev/null
+		for i in $(seq 1 60); do [ -e "$CXL/$m" ] || return 0; sleep 0.5; done
+		return 1
+	}
+	gone=0
+	for b in "${bdfs[@]:0:7}"; do unbind_bdf "$b" && gone=$((gone+1)); done
+	expect_eq "seven endpoints unbound" "$gone" 7
+	v=$(creg "$rp_bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for RP BI Decoder readback"
+	else
+		expect_eq "RP still Forward after seven releases" "$((v & 3))" 1
+	fi
+	expect_eq "surviving endpoint still in BI" \
+		"$(bis "$(ep_decoder_for_mem "$(mem_for_bdf "${bdfs[7]}")")")" 0
+	if dmesg | grep -qE "BI dport disable failed|BI setup failed|WARNING:|BUG:"; then
+		fail "no BI errors across seven releases"
+	else
+		ok "no BI errors across seven releases"
+	fi
+	unbind_bdf "${bdfs[7]}" && ok "eighth endpoint unbound" || fail "eighth endpoint unbound"
+	v=$(creg "$rp_bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for RP BI Decoder readback"
+	else
+		expect_eq "RP cleared after the last release" "$((v & 3))" 0
+	fi
+
+	# --- rebind all eight; one recovery rebind allowed per endpoint
+	# for the sibling probe/reap race (README Known limitations).
+	dmesg -C
+	nrec=0
+	for b in "${bdfs[@]}"; do
+		echo "$b" > /sys/bus/pci/drivers/cxl_pci/bind 2>/dev/null
+	done
+	back=0
+	for b in "${bdfs[@]}"; do
+		d=$(wait_ep_bdf "$b" 40)
+		if [ -z "$d" ]; then
+			m=$(mem_for_bdf "$b")
+			if [ -n "$m" ] && [ ! -e "$CXL/$m/driver" ]; then
+				nrec=$((nrec+1))
+				echo "$m" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+				d=$(wait_ep_bdf "$b" 60)
+			fi
+		fi
+		[ -n "$d" ] && back=$((back+1))
+	done
+	[ "$nrec" -gt 0 ] && echo "# recovered $nrec endpoint(s) via rebind"
+	expect_eq "all eight endpoints back after rebind (recovered=$nrec)" "$back" 8
+	if dmesg | grep -qE "BI setup failed|Failed to request region"; then
+		fail "no 'BI setup failed' / dport mapping leak on rebind"
+	else
+		ok "no 'BI setup failed' / dport mapping leak on rebind"
+	fi
+	v=$(creg "$rp_bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for RP BI Decoder readback"
+	else
+		expect_eq "RP Forward again with eight children" "$((v & 3))" 1
+	fi
+	mems=( $(mems_by_bdf) )
+	region=$(create_region "$rd" 4 256 "${mems[@]:0:4}")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "4-way HDM-DB region commits again after the rebind cycle" || \
+		fail "4-way HDM-DB region commits again after the rebind cycle"
+	[ -n "$region" ] && destroy_region "$region" "$rd"
+	;;
+
+# --------------------------------------------------------------- t32
+t32)	# 4-way HDM-DB interleave across two switches under two host
+	# bridges: window-level 2-way (two targets, 4k) times switch-level
+	# 2-way. Positions are dport-major: pos = hb + 2 * dsp.
+	check_cap_back_invalidate_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	expect_eq "root decoder iw=2 (window-level interleave)" \
+		"$(cat "$CXL/$rd/interleave_ways")" 2
+	CR_IG=4096
+	mems=( $(mems_by_bdf) )
+	expect_eq "four memdevs enumerated" "${#mems[@]}" 4
+	[ "${#mems[@]}" = 4 ] || exit 1
+	# BDF order is hb0/dsp0 hb0/dsp1 hb1/dsp0 hb1/dsp1.
+	order=( "${mems[0]}" "${mems[2]}" "${mems[1]}" "${mems[3]}" )
+	decs=()
+	for m in "${order[@]}"; do decs+=( "$(ep_decoder_for_mem "$m")" ); done
+	usp0=$(port_above "$(endpoint_of_mem "${mems[0]}")")
+	usp1=$(port_above "$(endpoint_of_mem "${mems[2]}")")
+
+	# Plain BDF order puts both hb0 endpoints at positions 0 and 1,
+	# but position 1 belongs to window target 1: refused at attach.
+	region=$(create_region "$rd" 4 256 "${mems[@]}")
+	if [ -z "$region" ]; then
+		ok "BDF-order wiring refused (same host bridge at consecutive positions)"
+	else
+		fail "BDF-order wiring refused (same host bridge at consecutive positions)"
+	fi
+	delete_regions_under "$rd"
+	expect_eq "nothing committed after the refusal" "$(bis "${decs[@]}")" 0000
+
+	region=$(create_region "$rd" 4 256 "${order[@]}")
+	[ -n "$region" ] && ok "create 4-way HDM-DB region (2 HBs x 2 DSPs)" \
+		|| { fail "create 4-way HDM-DB region (2 HBs x 2 DSPs)"; exit 1; }
+	check "commit 4-way HDM-DB region (2 HBs x 2 DSPs)" commit_region "$region"
+	expect_eq "region iw=4 ig=4096" "$(decoder_iw_ig "$region")" "4 4096"
+	expect_eq "all four endpoints bi=1 post-commit" "$(bis "${decs[@]}")" 1111
+	expect_eq "endpoint decoder iw=4 ig=4096" "$(decoder_iw_ig "${decs[0]}")" "4 4096"
+	sd=$(region_decoder_in_port "$usp0" "$region")
+	expect_eq "first USP decoder iw=2 ig=8192" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "2 8192"
+	sd=$(region_decoder_in_port "$usp1" "$region")
+	expect_eq "second USP decoder iw=2 ig=8192" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "2 8192"
+	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
+	no_setup_failure
+	no_region_mismatch_warn
+	destroy_region "$region" "$rd"
+	expect_eq "all four endpoints bi=0 post-destroy" "$(bis "${decs[@]}")" 0000
+
+	region=$(create_region "$rd" 4 256 "${order[@]}")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "re-create + commit after full teardown" || \
+		fail "re-create + commit after full teardown"
+	[ -n "$region" ] && destroy_region "$region" "$rd"
+	;;
+
+# --------------------------------------------------------------- t33
+t33)	# 4-way HDM-DB interleave across two switches under one host
+	# bridge: the host-bridge decoder goes 2-way across the RPs and
+	# each USP 2-way below it. One-target window, region granularity
+	# 1k. Positions are dport-major: pos = rp + 2 * dsp.
+	check_cap_back_invalidate_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	expect_eq "root decoder iw=1 (one-target window)" \
+		"$(cat "$CXL/$rd/interleave_ways")" 1
+	CR_IG=1024
+	mems=( $(mems_by_bdf) )
+	expect_eq "four memdevs enumerated" "${#mems[@]}" 4
+	[ "${#mems[@]}" = 4 ] || exit 1
+	# BDF order is rp0/dsp0 rp0/dsp1 rp1/dsp0 rp1/dsp1.
+	order=( "${mems[0]}" "${mems[2]}" "${mems[1]}" "${mems[3]}" )
+	decs=()
+	for m in "${order[@]}"; do decs+=( "$(ep_decoder_for_mem "$m")" ); done
+	ep0=$(endpoint_of_mem "${mems[0]}")
+	usp0=$(port_above "$ep0")
+	usp1=$(port_above "$(endpoint_of_mem "${mems[2]}")")
+	hb=$(port_above "$ep0" 2)
+	rp0_bdf=$(bdf_above "${mems[0]}" 3)
+	rp1_bdf=$(bdf_above "${mems[2]}" 3)
+
+	# Plain BDF order reuses the rp0 dport at positions 0 and 1,
+	# closer than the host-bridge stride of 2: refused at attach.
+	region=$(create_region "$rd" 4 256 "${mems[@]}")
+	if [ -z "$region" ]; then
+		ok "BDF-order wiring refused (same RP at consecutive positions)"
+	else
+		fail "BDF-order wiring refused (same RP at consecutive positions)"
+	fi
+	delete_regions_under "$rd"
+	expect_eq "nothing committed after the refusal" "$(bis "${decs[@]}")" 0000
+
+	region=$(create_region "$rd" 4 256 "${order[@]}")
+	[ -n "$region" ] && ok "create 4-way HDM-DB region (2 RPs x 2 DSPs)" \
+		|| { fail "create 4-way HDM-DB region (2 RPs x 2 DSPs)"; exit 1; }
+	check "commit 4-way HDM-DB region (2 RPs x 2 DSPs)" commit_region "$region"
+	expect_eq "region iw=4 ig=1024" "$(decoder_iw_ig "$region")" "4 1024"
+	expect_eq "all four endpoints bi=1 post-commit" "$(bis "${decs[@]}")" 1111
+	expect_eq "endpoint decoder iw=4 ig=1024" "$(decoder_iw_ig "${decs[0]}")" "4 1024"
+	sd=$(region_decoder_in_port "$hb" "$region")
+	expect_eq "host-bridge decoder iw=2 ig=1024" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "2 1024"
+	sd=$(region_decoder_in_port "$usp0" "$region")
+	expect_eq "first USP decoder iw=2 ig=2048" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "2 2048"
+	sd=$(region_decoder_in_port "$usp1" "$region")
+	expect_eq "second USP decoder iw=2 ig=2048" \
+		"$([ -n "$sd" ] && decoder_iw_ig "$sd")" "2 2048"
+	v0=$(creg "$rp0_bdf" bictrl); v1=$(creg "$rp1_bdf" bictrl)
+	if [ -z "$v0" ] || [ -z "$v1" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for RP BI Decoder readback"
+	else
+		expect_eq "both RPs Forward" "$((v0 & 3))$((v1 & 3))" 11
+	fi
+	check "dmesg: 'created HDM-DB' region log" dmesg_saw "created HDM-DB"
+	no_setup_failure
+	no_region_mismatch_warn
+	destroy_region "$region" "$rd"
+	expect_eq "all four endpoints bi=0 post-destroy" "$(bis "${decs[@]}")" 0000
+
+	region=$(create_region "$rd" 4 256 "${order[@]}")
+	[ -n "$region" ] && commit_region "$region" && \
+		ok "re-create + commit after full teardown" || \
+		fail "re-create + commit after full teardown"
+	[ -n "$region" ] && destroy_region "$region" "$rd"
 	;;
 esac
 
