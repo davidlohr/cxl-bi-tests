@@ -17,7 +17,7 @@ QEMU knobs skip themselves when the binary lacks them.
 Thirty-three topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
-Per-suite QEMU topology diagrams live in [topologies.md](topologies.md).
+Per-suite QEMU topology diagrams live in [docs/topologies.md](docs/topologies.md).
 What the driver supports and refuses, by coherency model, window
 restriction, device class and creation path, is tabulated in
 [docs/linux-support-matrix.md](docs/linux-support-matrix.md); the plan
@@ -28,7 +28,7 @@ for confirming it on Type 3 hardware is
 |-------|----------|-------------------|
 | **t1** | Endpoint directly under an RP, no switch, BI CFMWS | BI enables end-to-end through a single dport; an HDM-DB region commits and the endpoint reports `bi=1`. |
 | **t2** | Endpoint under DSP + USP + RP, BI CFMWS | BI enables through the full DSP + USP + RP walk; an HDM-DB region commits. Phase 2 verifies `cxl_bi_dealloc` on unbind and a fresh `cxl_bi_setup` on rebind. |
-| **t3** | BI-capable endpoint, non-BI CFMWS | No BI root decoder is created; an HDM-H region commits without any BI activation on the topology. |
+| **t3** | BI-capable endpoint, non-BI CFMWS | No BI root decoder is created; an HDM-H region commits with the endpoint at `bi=0`, while BI setup (window-independent) still enables the path. |
 | **t4** | Non-BI endpoint (`hdm-db` off), BI CFMWS | Region attach rejects with "BI not enabled on device". |
 | **t5** | Two BI endpoints sharing one switch and one RP, BI CFMWS | A 2-way HDM-DB region commits with both endpoints in BI. Phase 2 verifies the shared RP keeps BI enabled while any child still needs it (`nr_bi` refcount) and that rebinding one endpoint does not leak the dport BI Decoder mapping. |
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |

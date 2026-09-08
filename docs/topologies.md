@@ -1,6 +1,6 @@
 # Suite topologies
 
-The QEMU shape behind every suite, as launched by `topos/t*.sh`.
+The QEMU shape behind every suite, as launched by `../topos/t*.sh`.
 
 Conventions shared by (nearly) all of them:
 
@@ -138,7 +138,7 @@ rp0 ─ us0 ─ dsp0 ─ mem0 (hdm-db)     rp0 → Forward  nr_bi=2
 ```
 
 A 2-way HDM-DB region across both; the shared levels are the USP/RP.
-Phase 2 hot-removes one endpoint: `rp0` 2→1 and it must hold Forward
+Phase 2 unbinds one endpoint's driver: `rp0` 2→1 and it must hold Forward
 for the survivor. (The shared Above-HBR-USP variant is t25/shared.)
 
 ## t6 — switch USP without a BI RT
@@ -193,8 +193,10 @@ reject the non-BI target.
 
 ## t13 — host-only + back-invalidate window (negative launch)
 
-No guest, barely a topology: one `pxb-cxl` and a CFMWS declaring both
-`host-only=on` and `back-invalidate=on`. QEMU must refuse to launch
+No guest, barely a topology: one `pxb-cxl` (no RP, no endpoint) and a
+4G CFMWS with no granularity set, declaring both `host-only=on` and
+`back-invalidate=on`, launched raw (`-nodefaults`, not through
+`launch_qemu`, so no BI oracle either). QEMU must refuse to launch
 (§9.18.1.3 Window Restrictions make the combination undefined).
 
 ## t14 — two host bridges, split windows
@@ -217,28 +219,37 @@ reverts and then commits into an HDM-H region.
 
 ## t16 — firmware-committed decoders (multi-boot, host-driven)
 
-Three shapes across its scenarios, all passthrough single-RP (the only
+Four shapes across its scenarios, all passthrough single-RP (the only
 staging QEMU supports):
 
 ```
 (a) cxl.1 ─ rp0 ─ vmem0 (x-committed=hdm-db | hdm-h)      per scenario
 (b) cxl.1/cxl.2/cxl.3 ─ rp1/rp2/rp3 ─ vmem0/1/2           combined boot
-(c) cxl.1 ─ rp0 ─ vmem0 ┐  x-committed-ways=2: a staged 2-way
-    cxl.2 ─ rp1 ─ vmem1 ┘  committed interleave set
+(c) cxl.1 ─ rp1 ─ vmem0 ┐  x-committed-ways=2: a staged 2-way
+    cxl.2 ─ rp2 ─ vmem1 ┘  committed interleave set
+(d) cxl.1 ─ rp1 ─ accel0 (cxl-accel, x-coherency-unknown=on, x-committed=hdm-d) ┐ x-committed-ways=2,
+    cxl.2 ─ rp2 ─ vmem1  (hdm-db=on, x-committed=hdm-h)                          ┘ window without back-invalidate
 ```
 
 `x-committed` stages the endpoint HDM decoder committed (BI bit per
 mode) and, for `hdm-db`, the endpoint BI Enable — the firmware
 adoption entry state. nr_bi=1 at each RP above an `hdm-db` device
-(adoption takes the refcount exactly like a fresh enable), 0 above the
-`hdm-h` ones (no `hdm-db`, not BI-capable). Window variants (BI
-present/absent) drive the adopt vs reject legs.
+(adoption takes the refcount exactly like a fresh enable; (d)'s `vmem1`
+is `hdm-db` too and enables fresh despite its `hdm-h` commit), 0 above
+the `hdm-h` ones that lack `hdm-db` (not BI-capable). Window variants
+(BI present/absent) drive the adopt vs reject legs. (d) is the mixed
+range-type set: an HDM-D-committed accelerator and an HDM-H-committed
+Type 3 under a bare (non-BI) window, which must not assemble
+("coherency model mismatch"). Deviations from the shared conventions:
+memdevs are 256M `share=on`, the RPs never carry an explicit
+`x-256b-flit=on` (only the `hdm-db` endpoints do), and (d)'s first
+endpoint is a `cxl-accel`.
 
 ## t17 — QMP hotplug
 
 ```
-rp0 ─ us0 ─ dsp0 ─ ep0 (sn=0x171, cold-plugged)
-         └─ dsp1   (empty: hot-add target, sn=0x172)
+rp0 ─ us0 ─ dsp0 ─ ep0 (sn=0x171, cold-plugged; hot-remove target)
+         └─ dsp1   (empty: hot-add target, sn=0x172; survivor)
          └─ dsp2   (empty: re-add target, sn=0x173)
 ```
 
@@ -248,8 +259,8 @@ BI setup driven by real pciehp events, with `rp0` aggregating:
                     rp0  dsp0  dsp1  dsp2
 boot                 1     1     -     -
 hot-add 0x172        2     1     1     -
-hot-remove 0x172     1     1     0     -     survivor path stays enabled
-hot-add 0x173        2     1     0     1
+hot-remove 0x171     1     0     1     -     survivor path (dsp1) stays enabled
+hot-add 0x173        2     0     1     1
 ```
 
 ## t18 — storm (t5's shape)
@@ -272,9 +283,11 @@ attach must reject in either wiring order.
 ## t21 — BOTH-coherency fallback
 
 t2's shape plus a second (HDM-H) window, with
-`x-bi-commit-fault=timeout` on the DSP: BI setup fails at boot and the
-rollback returns every count to 0; an HDM-DB attach then fails closed
-while a host-only region still commits on the same endpoint decoder.
+`x-bi-commit-fault=timeout` on the DSP when QEMU offers it: BI setup
+then fails at boot and the rollback returns every count to 0; an HDM-DB
+attach fails closed while a host-only region still commits on the same
+endpoint decoder. Without the knob the path enables (t2's counts) and
+the fallback checks SKIP.
 
 ## t22 — Unknown Supported Coherency Models
 
@@ -282,23 +295,28 @@ t1's direct-attach shape (`rp0` nr_bi=1) with `x-coherency-unknown=on`:
 the endpoint advertises 00b in Supported Coherency Models (Table 8-116)
 and must still commit into an HDM-DB region via the `cxlds->bi` gate.
 
-## t23 — commit faults (multi-boot, host-driven)
+## t23 — commit faults (six boots, host-driven)
 
 t2's single-switch shape, re-launched per scenario with fault knobs:
 `x-bi-commit-fault=error|timeout` on the DSP (BI Decoder commit) or
 the USP (BI RT commit), `x-bi-committed=on` on the DSP (committed
 decoder, uncommitted RT — the adopt-rt leg), and
-`x-bi-commit-fault-after=1` (dealloc-time fault). Counts: the four
-fault legs roll back to 0 everywhere (a failing level never
+`x-bi-commit-fault=error,x-bi-commit-fault-after=1` on the DSP (the
+allocate-time commit succeeds, the dealloc-time one faults). Counts:
+the four fault legs roll back to 0 everywhere (a failing level never
 increments); adopt-rt and dealloc-err reach t2's steady state
-(`dsp0`/`rp0` nr_bi=1) before their teardowns.
+(`dsp0`/`rp0` nr_bi=1); only dealloc-err then tears down (cxl_pci
+unbind), adopt-rt ends at steady state.
 
-## t24 — firmware adoption (multi-boot, host-driven)
+## t24 — firmware adoption (five boots, host-driven)
 
 ```
 (adopt)      rp0 ─ mem0 (x-committed=hdm-db)      full firmware path
 (fresh-dev)  rp0 ─ us0(x-bi-rt-committed) ─ dsp0(x-bi-committed) ─ mem0
 (wrong-role) rp0 ─ us0 ─ dsp0(x-bi-committed!) ─ us1 ─ dsp1 ─ mem0
+(fw-path)    rp0 ─ us0(x-bi-rt-committed) ─ dsp0(x-bi-fw-committed)
+               ─ us1(x-bi-rt-committed) ─ dsp1(x-bi-committed) ─ mem0(x-bi-enabled)
+(fw-partial) as fw-path, but us1 WITHOUT x-bi-rt-committed (inner RT uncommitted)
 ```
 
 Adoption as a path property: a firmware-enabled direct-attach device
@@ -307,8 +325,20 @@ firmware did NOT enable still owe their commits; a DSP that is Above
 HBR USP but staged with the Above-SLD role (Enable) gets corrected to
 Forward and committed. Counts: adopt `rp0`=1 (an adopted level still
 takes nr_bi++, so teardown unwinds it like any other); fresh-dev
-`dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/`rp0`=1. Each scenario's
-unbind walks its counts back to 0.
+`dsp0`/`rp0`=1; wrong-role `dsp1`/`dsp0`/`rp0`=1. The adopt and
+fresh-dev unbinds walk their counts back to 0; wrong-role and the two
+fw legs end at steady state.
+
+Two further boots stage a cascade firmware brought up end to end:
+`x-bi-enabled=on` sets only the endpoint's BI Enable (so, unlike
+`x-committed`, it composes with switches), `x-bi-fw-committed=on`
+stages the transit DSP's Forward+committed, `x-bi-committed=on` the
+adjacent DSP's Enable+committed, `x-bi-rt-committed=on` a USP's route
+table. fw-path (every level correct and committed) adopts the whole way
+up with zero commit cycles and both DSP roles kept; fw-partial leaves
+the inner RT (`us1`) uncommitted, so adoption dies at `dsp1` and `dsp0`
+above it - staged perfectly - must still program and commit (4
+commits, not 2). Counts: `dsp1`/`dsp0`/`rp0`=1 in both; neither unbinds.
 
 ## t26 — Type 2 accelerator coherency (one boot)
 
@@ -316,7 +346,7 @@ unbind walks its counts back to 0.
 pxb-cxl (cxl.1)
 |- cxl-rp rp0 - cxl-accel accel0   hdm-db=on, Supported Coherency
 |                                  Models = device-coherent only
-`- cxl-rp rp1 - cxl-type3 mem      host+dev coherency (control)
+`- cxl-rp rp1 - cxl-type3 mem1     host+dev coherency (control)
 fmw0: BI (HDM-DB)   fmw1: default (HDM-H)   fmw2: host-only=off (HDM-D)
 ```
 
@@ -353,7 +383,33 @@ cxl_calc_interleave_pos), and teardown reverts every decoder cleanly.
 Both switch groups happen to carry one device of each class, so the
 mixed-pair selection for the interleave leg is topology-robust.
 
-## t27 — BI across a device reset (five boots)
+## t30 — HDM-D decoder vs window coherency restriction (three boots)
+
+```
+(hdm-d)     cxl.1 ─ rp0 ─ cxl-accel mem0 (x-committed=hdm-d)   fmw.0: host-only=off
+(refusal)   cxl.1 ─ rp0 ─ cxl-accel mem0 (x-committed=hdm-d)   fmw.0: device-coherent=off
+(refusal2)  cxl.1 ─ rp0 ─ cxl-type3 mem0 (x-committed=hdm-h)   fmw.0: host-only=off
+            rp0: no BI role, nr_bi=0 in all three
+```
+
+Not a BI topology: no window carries `back-invalidate`, no device
+carries `hdm-db` (qemu defaults it off, so nothing is BI-capable) and
+neither `rp0` nor the endpoint carries `x-256b-flit`. The endpoint is a
+`cxl-accel` because HDM-D is a Type 2 decode. `x-committed=hdm-d`
+stages a firmware-committed device-coherent decoder (TRT and BI both
+clear); qemu picks the lowest window whose restrictions match and
+otherwise falls back to the lowest window targeting the HB. Boot 1
+offers the matching device-coherent window (`host-only=off`) and the
+region must auto-assemble and commit with endpoint `bi=0`. Boot 2
+narrows the only window to host-only (`device-coherent=off`), so the
+staging falls back into a window that contradicts the decoder and
+assembly must refuse ("coherency model not permitted by the window",
+no region). Boot 3 is the mirror: a `cxl-type3` with
+`x-committed=hdm-h` under the device-coherent-only window, same refusal
+from the opposite direction. SKIPs wholesale when qemu lacks `cxl-accel`
+with `x-committed`, or its `hdm-d` flavor.
+
+## t27 — BI across a device reset (seven boots)
 
 ```
 pxb-cxl (cxl.1)
@@ -365,7 +421,8 @@ Direct attach so the device is connected directly to the Root Port and
 the reset lands strictly below it - which makes "the endpoint's BI Decoder
 was wiped while the dport above still points at it" directly
 observable. Reset is issued through the kernel (`/sys/bus/pci/devices/
-<ep>/reset`, method `cxl_bus`) rather than a raw setpci poke, so the
+<ep>/reset`; method `cxl_bus` on the SBR arms, `flr` on the FLR arms)
+rather than a raw setpci poke, so the
 `pci_error_handlers` `.reset_prepare`/`.reset_done` path actually runs.
 Boot 1 resets with nothing committed, then walks the whole recovery
 arc: the invalidated flag refuses an HDM-DB attach, unbind unwinds the
@@ -378,7 +435,7 @@ silent. Boot 4 repeats it with a committed HDM-DB region, where the
 two flavors diverge: the SBR of boot 2 wipes the decoders and trips
 the decoder-loss taint, while the FLR leaves region, decoders and BI
 all standing.
-Boot 4 moves the device below a switch:
+Boot 5 moves the device below a switch:
 
 ```
 pxb-cxl (cxl.1)
@@ -393,6 +450,55 @@ keep their programming and their nr_bi across it - and the later
 unbind must unwind both levels despite the invalidated cxlds->bi,
 the multi-level form of the leak the unconditional dealloc prevents.
 
+Boot 6 resets a firmware-adopted path (t24's adopt shape, direct-attach
+`mem0` with `x-committed=hdm-db`): the SBR wipes the adopted endpoint
+Enable, invalidation fires exactly as on a driver-enabled path, and
+recovery must come up fresh - the rebind window shows "BI requests
+enabled" and no re-adopt of the wiped seed (the unbind also walks the
+dead auto-region down through a wiped decoder). Boot 7 swaps in a Type 2
+accelerator and adds a plain window:
+
+```
+pxb-cxl (cxl.1)
+└─ cxl-rp rp0            RP → Enable   nr_bi=1
+   └─ cxl-accel accel0   (hdm-db, device-coherent only)   reset target
+fmw.0: BI    fmw.1: plain (HDM-H)
+```
+
+With an HDM-DB region committed, the SBR invalidates `cxlds->bi`; the
+HDM-DB attach then refuses and the device-coherent-only check refuses
+the plain window - nothing attachable remains until a rebind, after
+which the region commits again. Boots 6 and 7 SKIP when qemu lacks
+`x-committed` / `cxl-accel`.
+
+## t28 — AER fatal-error recovery (two boots)
+
+```
+pxb-cxl (cxl.1)
+└─ cxl-rp rp0            RP → Enable   nr_bi=1   (AER irq thread runs here)
+   └─ cxl-type3 mem0     (hdm-db)      injection target: MALF_TLP
+```
+
+t27's direct-attach shape and its one BI window, booted with
+`pcie_ports=native` so the OS owns AER. Each boot injects an
+Uncorrectable Fatal through qemu's HMP (`pcie_aer_inject_error mem0
+MALF_TLP`): scenario A with nothing committed, scenario B with an HDM-DB
+region live (detached and decommitted by the bounce, never deleted).
+The AER path never runs `.reset_prepare`/`.reset_done`
+(`PCI_RESET_NO_RESTORE`); `cxl_error_detected()` bounces the memdev
+driver before the link reset and `cxl_slot_reset()`'s `device_attach()`
+re-runs the enable path from scratch, so the RP's count round-trips:
+
+```
+                        rp0
+boot                     1
+bounce (devres)          0     cxl_error_detected, before the link reset
+slot reset + attach      1     RP re-programmed Enable, endpoint Enable back
+```
+
+A fresh HDM-DB region then commits `bi=1`. Premise-SKIPs when the guest
+lacks CONFIG_PCIEAER / CONFIG_CXL_RAS or qemu rejects the injection.
+
 ## t31 — eight endpoints under one switch, 4-way and 8-way (one boot)
 
 ```
@@ -401,7 +507,7 @@ cxl-fmw.0 (BI, one target)
    └─ cxl-rp rp0                   RP  → Forward, nr_bi=8
       └─ cxl-upstream us0          USP decoder iw=4, then iw=8, ig=256
          ├─ cxl-downstream dsp0    DSP → Enable
-         │  └─ cxl-type3 mem0      (hdm-db)   4-way and 8-way member
+         │  └─ cxl-type3 mem0      (hdm-db, 256M memdevs)   4-way and 8-way member
          ├─ cxl-downstream dsp1..dsp3          4-way and 8-way members
          └─ cxl-downstream dsp4..dsp7          8-way members only
 ```
@@ -420,7 +526,7 @@ cxl-fmw.0 (BI, two targets, 4k)    root decoder iw=2, ig=4096
 ├─ pxb-cxl (cxl.1)                 window target 0, passthrough
 │  └─ cxl-rp rp0                   RP  → Forward, nr_bi=2
 │     └─ cxl-upstream us0          USP decoder iw=2, ig=8192
-│        ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0
+│        ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0   (512M memdevs throughout)
 │        └─ cxl-downstream dsp1 — cxl-type3 mem1   position 2
 └─ pxb-cxl (cxl.2)                 window target 1, passthrough
    └─ cxl-rp rp1                   RP  → Forward, nr_bi=2
@@ -442,7 +548,7 @@ cxl-fmw.0 (BI, one target)         root decoder iw=1
 └─ pxb-cxl (cxl.1)                 HB decoder iw=2, ig=1024 (not passthrough)
    ├─ cxl-rp rp0 (port 0)          RP  → Forward, nr_bi=2
    │  └─ cxl-upstream us0          USP decoder iw=2, ig=2048
-   │     ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0
+   │     ├─ cxl-downstream dsp0 — cxl-type3 mem0   position 0   (512M memdevs throughout)
    │     └─ cxl-downstream dsp1 — cxl-type3 mem1   position 2
    └─ cxl-rp rp1 (port 1)          RP  → Forward, nr_bi=2
       └─ cxl-upstream us1          USP decoder iw=2, ig=2048
