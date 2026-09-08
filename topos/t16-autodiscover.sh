@@ -436,4 +436,59 @@ else
 	fail "mixed: mismatch rejected with a diagnostic"
 fi
 
+# --- scenario 9: mixed-TRT 2-way set (HDM-D accel + HDM-H type3) ------
+# Class-honest members: the accel commits HDM-D (legal for a Type 2),
+# the type3 commits HDM-H (legal for a Type 3, hdm-db capable so its
+# coherency capability is BOTH). Firmware's sin is the set: one 2-way
+# interleave under a window permitting both models (bare window, BOTH,
+# non-BI), so every member passes the BI parity and the window check
+# and only the committed range type contradicts across the set. The
+# accel declines to report a coherency model (x-coherency-unknown,
+# sanctioned by Table 8-116) so the supported-coherency checks cannot
+# fire in either construct order: the committed-flavor range-type
+# comparison is the only refusal standing between this set and a
+# committed region. A kernel without it assembles the set.
+if ! "$QEMU" -device help 2>/dev/null | grep -q '"cxl-accel"' ||
+   ! "$QEMU" -device cxl-accel,help 2>/dev/null | grep -q "x-coherency-unknown"; then
+	for i in $(seq 1 4); do
+		skip "qemu lacks cxl-accel with x-coherency-unknown"
+	done
+	exit $((FAIL != 0))
+fi
+launch_qemu \
+  -object memory-backend-ram,id=m0,share=on,size=256M \
+  -object memory-backend-ram,id=m1,share=on,size=256M \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device pxb-cxl,bus_nr=64,bus=pcie.0,id=cxl.2 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp1,chassis=0,slot=2 \
+  -device cxl-rp,port=0,bus=cxl.2,id=rp2,chassis=1,slot=2 \
+  -device cxl-accel,bus=rp1,volatile-memdev=m0,id=accel0,x-coherency-unknown=on,x-committed=hdm-d,x-committed-ways=2 \
+  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,x-256b-flit=on,hdm-db=on,x-committed=hdm-h,x-committed-ways=2 \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.targets.1=cxl.2,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k
+if ! wait_for_guest 180; then
+	fail "mixed-trt: guest booted"; exit 1
+fi
+ok "mixed-trt: guest booted (HDM-D accel + HDM-H type3 2-way set)"
+ncommitted=$(g 'c=0; for r in /sys/bus/cxl/devices/region*/commit; do
+	[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && c=$((c+1)); done; echo $c')
+if [ "$ncommitted" = 0 ]; then
+	ok "mixed-trt: no committed region across the set"
+else
+	fail "mixed-trt: no committed region across the set (got $ncommitted)"
+fi
+nmem=$(g 'ls -d /sys/bus/cxl/devices/mem* 2>/dev/null | wc -l')
+if [ "$nmem" = 2 ]; then
+	ok "mixed-trt: both endpoints survive"
+else
+	fail "mixed-trt: both endpoints survive (got $nmem)"
+fi
+if assembly_gap; then
+	skip "mixed-trt: range-type mismatch refused (kernel lacks passthrough assembly)"
+elif [ "$(g dmesg | grep -c 'coherency model mismatch')" -gt 0 ]; then
+	ok "mixed-trt: range-type mismatch refused"
+else
+	fail "mixed-trt: range-type mismatch refused"
+fi
+g dmesg > "$OUT/t16-mixed-trt.dmesg" 2>/dev/null
+
 exit $((FAIL != 0))
