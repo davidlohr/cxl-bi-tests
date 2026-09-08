@@ -244,6 +244,8 @@ no_region_mismatch_warn() {
 
 # creg <bdf> <mode>: component-block register truth via /dev/mem.
 #   bictrl - BI Decoder Control (cap ID 0xC)
+#   biclear- clear BI Enable in BI Decoder Control behind the driver
+#            (stands in for a reset the driver never observes)
 #   hdmbi  - 1 iff every committed HDM decoder (cap ID 5) has BI=1,
 #            0 if a committed decoder lacks it, empty if none
 # Empty output = no /dev/mem MMIO; callers SKIP.
@@ -262,6 +264,11 @@ for i in range((u32(0) >> 24) & 0xff):
     caps[e & 0xffff] = (e >> 20) & 0xfff
 if mode == 'bictrl':
     print('%#x' % u32(caps[0xc] + 4))
+elif mode == 'biclear':
+    o = caps[0xc] + 4
+    v = u32(o)
+    ctypes.c_uint32.from_buffer(m, o).value = v & ~2
+    print('%#x -> %#x' % (v, u32(o)))
 else:
     h = caps[0x5]
     ndec = [1, 2, 4, 6, 8, 10, 12, 14][u32(h) & 0xf]
@@ -1615,6 +1622,151 @@ t33)	# 4-way HDM-DB interleave across two switches under one host
 		ok "re-create + commit after full teardown" || \
 		fail "re-create + commit after full teardown"
 	[ -n "$region" ] && destroy_region "$region" "$rd"
+	;;
+
+# --------------------------------------------------------------- t34
+t34)	# a refused attach must leave the decoder alone; BI dealloc must
+	# not trust a flag the hardware no longer backs.
+	check_cap_back_invalidate_present
+	check_endpoint_bi_present
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	mem=$(all_mems | head -1)
+	dec=$(ep_decoder_for_mem "$mem")
+	bdf=$(bdf_for_mem "$mem")
+	ep=$(endpoint_of_mem "$mem")
+	[ -n "$dec" ] || { fail "no endpoint decoder for $mem"; exit 1; }
+
+	# --- arm 1: A's decoder written into B is refused, and untouched
+	A=$(create_region "$rd" 1 256 "$mem")
+	[ -n "$A" ] && ok "region A created" || { fail "region A created"; exit 1; }
+	check "region A committed" commit_region "$A"
+	expect_eq "decoder in A: accelerator" \
+		"$(endpoint_decoder_target_type "$dec")" accelerator
+	expect_eq "decoder in A: bi=1" "$(cat "$CXL/$dec/back_invalidate")" 1
+	B=$(cat "$CXL/$rd/create_ram_region")
+	echo "$B" > "$CXL/$rd/create_ram_region"
+	echo 256 > "$CXL/$B/interleave_granularity"
+	echo 1 > "$CXL/$B/interleave_ways"
+	echo $((256 << 20)) > "$CXL/$B/size"
+	if echo "$dec" > "$CXL/$B/target0" 2>/dev/null; then
+		fail "attach of A's decoder to B refused"
+	else
+		ok "attach of A's decoder to B refused"
+	fi
+	expect_eq "decoder still in A after the refusal" \
+		"$(cat "$CXL/$dec/region")" "$A"
+	expect_eq "decoder keeps accelerator after the refusal" \
+		"$(endpoint_decoder_target_type "$dec")" accelerator
+	expect_eq "decoder keeps bi=1 after the refusal" \
+		"$(cat "$CXL/$dec/back_invalidate")" 1
+	expect_eq "A still committed" "$(cat "$CXL/$A/commit")" 1
+	reset_region "$A"
+	check "A re-committed" commit_region "$A"
+	v=$(creg "$bdf" hdmbi)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for HDM readback"
+	else
+		expect_eq "re-committed A programs the endpoint decoder with BI" "$v" 1
+	fi
+	destroy_region "$B" "$rd"
+	destroy_region "$A" "$rd"
+	expect_eq "bi=0 after teardown" "$(cat "$CXL/$dec/back_invalidate")" 0
+	no_region_mismatch_warn
+
+	# --- arm 2: BI Enable cleared behind the driver, then the port unbound
+	v=$(creg "$bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 7 "no /dev/mem MMIO for BI Decoder Control"
+	else
+		expect_eq "endpoint BI Enable set before the clear" "$((v & 2))" 2
+		creg "$bdf" biclear >/dev/null
+		expect_eq "BI Enable cleared behind the driver" \
+			"$(( $(creg "$bdf" bictrl) & 2 ))" 0
+		dmesg -C
+		echo "$ep" > /sys/bus/cxl/drivers/cxl_port/unbind 2>/dev/null
+		for i in $(seq 1 60); do
+			[ -e "$CXL/$mem/driver" ] || break; sleep 0.2
+		done
+		check "dealloc saw the hardware already disabled" \
+			dmesg_saw "BI already disabled in hardware"
+		dmesg -C
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+		dec=$(wait_ep_bdf "$bdf" 60)
+		[ -n "$dec" ] && ok "endpoint back after rebind" \
+			|| { fail "endpoint back after rebind"; exit 1; }
+		check "BI re-enabled from scratch on rebind" \
+			dmesg_saw "BI requests enabled"
+		R=$(create_region "$rd" 1 256 "$mem")
+		[ -n "$R" ] && commit_region "$R" && \
+			expect_eq "HDM-DB region commits after recovery, bi=1" \
+				"$(cat "$CXL/$dec/back_invalidate")" 1 || \
+			fail "HDM-DB region commits after recovery, bi=1"
+		[ -n "$R" ] && destroy_region "$R" "$rd"
+
+		# best effort: race the unbind against a device reset
+		dmesg -C
+		for i in $(seq 1 20); do
+			ep=$(endpoint_of_mem "$mem")
+			[ -n "$ep" ] || { echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null; sleep 0.3; continue; }
+			creg "$bdf" biclear >/dev/null
+			echo "$ep" > /sys/bus/cxl/drivers/cxl_port/unbind 2>/dev/null
+			echo 1 > "/sys/bus/pci/devices/$bdf/reset" 2>/dev/null
+			sleep 0.05
+		done
+		expect_eq "no splat across unbind/reset races" \
+			"$(dmesg | grep -cE 'BUG:|Oops|WARNING:|Unable to handle')" 0
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+		dec=$(wait_ep_bdf "$bdf" 60)
+		[ -n "$dec" ] && ok "endpoint back after the races" \
+			|| fail "endpoint back after the races"
+	fi
+
+	# --- arm 3: a reset between attach and commit must refuse the commit
+	[ -n "$dec" ] || exit 1
+	R=$(create_region "$rd" 1 256 "$mem")
+	[ -n "$R" ] && ok "region attached before the reset" \
+		|| { fail "region attached before the reset"; exit 1; }
+	expect_eq "attached decoder inherited accelerator" \
+		"$(endpoint_decoder_target_type "$dec")" accelerator
+	dmesg -C
+	if echo cxl_bus > "/sys/bus/pci/devices/$bdf/reset_method" 2>/dev/null &&
+	   echo 1 > "/sys/bus/pci/devices/$bdf/reset" 2>/dev/null; then
+		check "reset invalidated the device's BI" \
+			dmesg_saw "BI disabled by reset"
+		dmesg -C
+		if commit_region "$R" 2>/dev/null; then
+			fail "commit refused after the reset"
+		else
+			ok "commit refused after the reset"
+		fi
+		check "refusal names the device" dmesg_saw "BI not enabled on device"
+		v=$(creg "$bdf" hdmbi)
+		if [ -z "$v" ]; then
+			ok "no endpoint decoder committed with BI"
+		else
+			fail "no endpoint decoder committed with BI (hdmbi=$v)"
+		fi
+		destroy_region "$R" "$rd"
+		# recovery: rebind, BI from scratch, a region commits again
+		dmesg -C
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+		dec=$(wait_ep_bdf "$bdf" 60)
+		[ -n "$dec" ] && ok "endpoint back after the reset recovery" \
+			|| { fail "endpoint back after the reset recovery"; exit 1; }
+		check "BI re-enabled after the reset recovery" \
+			dmesg_saw "BI requests enabled"
+		R=$(create_region "$rd" 1 256 "$mem")
+		[ -n "$R" ] && commit_region "$R" && \
+			expect_eq "HDM-DB region commits after the reset recovery, bi=1" \
+				"$(cat "$CXL/$dec/back_invalidate")" 1 || \
+			fail "HDM-DB region commits after the reset recovery, bi=1"
+		[ -n "$R" ] && destroy_region "$R" "$rd"
+	else
+		skip_qemu_gap 7 "no cxl_bus reset method"
+		destroy_region "$R" "$rd"
+	fi
 	;;
 esac
 

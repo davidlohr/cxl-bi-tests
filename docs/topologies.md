@@ -561,3 +561,27 @@ passthrough and its own HDM decoder carries the first interleave
 level. The one-target window leaves the region granularity free, and
 1k is used so a granularity other than 256 and 4k is exercised through
 three decoder levels.
+
+## t34 — refused attach and stale BI flag (one boot)
+
+```
+cxl-fmw.0 (BI, one target)
+└─ pxb-cxl (cxl.1)
+   └─ cxl-rp rp0            RP → Enable   nr_bi=1
+      └─ cxl-type3 mem0     (hdm-db)
+```
+
+t1's shape, used for two regressions the v8 review found. Arm 1 commits
+an HDM-DB region on mem0, writes the same endpoint decoder into a second
+region's target, and requires the refusal to leave the decoder's type,
+`bi` and region untouched, with a re-commit still programming BI. Arm 2
+clears the endpoint's BI Enable through `/dev/mem`, the stand-in for a
+reset the driver never observes, unbinds the endpoint port so the BI
+dealloc finds the hardware already clear, then rebinds and requires BI
+to come up from scratch. The unbind-versus-reset race at the end is
+best effort; the deterministic proof of the released-mapping read needs
+the detach work delayed. Arm 3 attaches a region's target without
+committing, issues an SBR through `reset_method=cxl_bus` so
+`.reset_done` invalidates `cxlds->bi`, and requires the commit to be
+refused rather than program BI on a device whose BI Enable the reset
+cleared.

@@ -190,6 +190,7 @@ declare -A TOPO=(
 	[t31]=t31-4way-switch.sh
 	[t32]=t32-2switch-2hb.sh
 	[t33]=t33-2switch-2rp.sh
+	[t34]=t34-refused-attach.sh
 )
 # Host-driven suites: the topology script emits TAP directly instead
 # of pushing run-tests.sh into a guest. t13 is a negative launch (no
@@ -201,7 +202,7 @@ HOST_ONLY_SUITES=" t13 t16 t17 t23 t24 t25 t26 t27 t28 t29 t30 "
 # gates, then the deeper topologies, then the guest-less checks. Later
 # suites depend on earlier invariants (region create, root cap_back_invalidate,
 # endpoint bi) already passing.
-ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t31 t32 t33 t21 t22 t18 t16 t17 t23 t24 t25 t26 t27 t28 t29 t30 t13"
+ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t9 t10 t11 t12 t14 t15 t19 t20 t31 t32 t33 t34 t21 t22 t18 t16 t17 t23 t24 t25 t26 t27 t28 t29 t30 t13"
 
 # No args: run everything. Otherwise run only the named suites, e.g.
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)
