@@ -602,4 +602,288 @@ else
 fi
 g dmesg > "$OUT/t27-switch.dmesg" 2>/dev/null
 
+# --- scenario 5: reset of a firmware-adopted path --------------------
+# t24 proves adoption; every reset above hits a driver-enabled path.
+# Here firmware staged the device (x-committed=hdm-db seeds the adopt:
+# endpoint Enable set, decoder committed, region auto-assembled) and
+# the SBR wipes that inheritance. Invalidation must fire exactly as
+# for a driver-enabled path, and recovery must come up FRESH: the
+# adopt seed is the endpoint Enable bit the reset just cleared, so a
+# rebind that "adopts" anything is reading state that no longer
+# exists.
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-committed"
+then
+	for i in $(seq 1 11); do
+		skip "adopt-reset: qemu cxl-type3 lacks x-committed"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-type3,bus=rp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-committed=hdm-db \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	if wait_for_guest 180; then
+		ok "adopt-reset: guest booted"
+	else
+		fail "adopt-reset: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	if grep -q "adopting firmware-enabled BI" <<<"$dm"; then
+		ok "adopt-reset: endpoint adopted at probe"
+	else
+		fail "adopt-reset: endpoint adopted at probe"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+	g "dmesg -C" >/dev/null
+	if do_reset "adopt-reset" "$ep"; then
+		ok "adopt-reset: reset issued through the kernel"
+	else
+		fail "adopt-reset: reset issued through the kernel"; exit 1
+	fi
+	ec=$(bi_ctrl "$ep")
+	dm=$(g dmesg)
+	if [ -z "$ec" ] || [ $(( ec & 0x2 )) != 0 ]; then
+		for i in 1 2 3 4 5 6; do
+			skip "adopt-reset: post-reset state (premise absent: ctrl='$ec')"
+		done
+	else
+		ok "adopt-reset: hardware cleared the adopted Enable"
+		if grep -q "BI disabled by reset" <<<"$dm"; then
+			ok "adopt-reset: invalidation fires on an adopted path"
+		else
+			fail "adopt-reset: invalidation fires on an adopted path"
+		fi
+		# Recovery. The unbind also tears the dead auto-region down
+		# through a wiped decoder - itself a path no other scenario
+		# walks. dmesg is cleared before the bind so the recovery
+		# window can only hold the rebind's own enable flavor.
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+		for i in $(seq 1 30); do
+			g "test -e /sys/bus/pci/devices/$ep/driver" || break
+		done
+		g "dmesg -C" >/dev/null
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+		mem2=""
+		for i in $(seq 1 60); do
+			mem2=$(g "ls /sys/bus/pci/devices/$ep 2>/dev/null" | \
+				grep '^mem' | head -1)
+			[ -n "$mem2" ] && break
+		done
+		if [ -n "$mem2" ]; then
+			ok "adopt-reset: endpoint re-probed ($mem2)"
+		else
+			fail "adopt-reset: endpoint re-probed"
+		fi
+		dm=$(g dmesg)
+		if grep -q "BI requests enabled" <<<"$dm"; then
+			ok "adopt-reset: recovery enables from scratch"
+		else
+			fail "adopt-reset: recovery enables from scratch"
+		fi
+		if grep -q "adopting firmware-enabled BI" <<<"$dm"; then
+			fail "adopt-reset: no re-adopt of the wiped seed"
+		else
+			ok "adopt-reset: no re-adopt of the wiped seed"
+		fi
+		ec2=$(bi_ctrl "$ep")
+		if [ -z "$ec2" ]; then
+			skip "adopt-reset: endpoint Enable back (no /dev/mem)"
+		elif [ $(( ec2 & 0x2 )) != 0 ]; then
+			ok "adopt-reset: endpoint Enable back"
+		else
+			fail "adopt-reset: endpoint Enable back ($ec2)"
+		fi
+	fi
+	dm=$(g dmesg)
+	grep -qE "WARNING:|BUG:" <<<"$dm" &&
+		fail "adopt-reset: no splat" || ok "adopt-reset: no splat"
+	oracle_silent "adopt-reset"
+	g dmesg > "$OUT/t27-adopt-reset.dmesg" 2>/dev/null
+fi
+
+# --- scenario 6: reset of a type2 accelerator ------------------------
+# A DEV-only device has no HDM-H fallback: once the reset invalidates
+# cxlds->bi, the HDM-DB gate refuses (reset consequence) and the
+# coherency gate refuses everything else (device nature) - no window
+# left at all until a rebind. Both windows exist in the topology so
+# both refusals are reachable.
+if ! "$QEMU" -device help 2>/dev/null | grep -q '"cxl-accel"'; then
+	for i in $(seq 1 14); do
+		skip "accel: qemu lacks the cxl-accel device"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-accel,bus=rp0,volatile-memdev=m0,id=accel0,x-256b-flit=on,hdm-db=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on,cxl-fmw.1.targets.0=cxl.1,cxl-fmw.1.size=4G,cxl-fmw.1.interleave-granularity=4k
+	if wait_for_guest 200; then
+		ok "accel: guest booted"
+	else
+		if grep -qiE "not a valid device|invalid parameter|Property.*not found" \
+				"$RUNDIR/qemu.log" "$CONSOLE_LOG" 2>/dev/null; then
+			for i in $(seq 1 14); do
+				skip "accel: qemu rejected the type2 topology"
+			done
+			exit $((FAIL != 0))
+		fi
+		fail "accel: guest booted"; exit 1
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+	if [ "$(g "cat /sys/bus/pci/devices/$ep/device")" = 0x0d94 ]; then
+		ok "accel: memdev is the accel function (0x0d94)"
+	else
+		fail "accel: memdev is the accel function"
+	fi
+	dm=$(g dmesg)
+	if grep -q "BI requests enabled" <<<"$dm"; then
+		ok "accel: BI enabled at probe"
+	else
+		fail "accel: BI enabled at probe"
+	fi
+	rd=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+			[ -e "$d/cap_back_invalidate" ] || continue
+			[ "$(cat $d/cap_back_invalidate)" = 1 ] &&
+				basename $d && break
+		done')
+	rdh=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+			[ -e "$d/create_ram_region" ] || continue
+			[ "$(cat $d/cap_back_invalidate 2>/dev/null)" = 1 ] ||
+				{ basename $d; break; }
+		done')
+	region=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+	dec=$(g 'basename $(ls -d /sys/bus/cxl/devices/endpoint*/decoder*.0 | head -1)')
+	g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+	   echo $region > \$CXL/$rd/create_ram_region;
+	   R=\$CXL/$region;
+	   echo 256 > \$R/interleave_granularity;
+	   echo 1 > \$R/interleave_ways;
+	   echo \$sz > \$R/size;
+	   echo 0 > \$CXL/$dec/dpa_size 2>/dev/null;
+	   echo ram > \$CXL/$dec/mode 2>/dev/null;
+	   echo \$sz > \$CXL/$dec/dpa_size;
+	   echo $dec > \$R/target0;
+	   echo 1 > \$R/commit" >/dev/null
+	if [ "$(g "cat /sys/bus/cxl/devices/$region/commit" 2>/dev/null)" = 1 ]
+	then
+		ok "accel: HDM-DB region committed"
+	else
+		fail "accel: HDM-DB region committed"
+	fi
+	g "dmesg -C" >/dev/null
+	if do_reset "accel" "$ep"; then
+		ok "accel: reset issued through the kernel"
+	else
+		fail "accel: reset issued through the kernel"; exit 1
+	fi
+	ec=$(bi_ctrl "$ep")
+	dm=$(g dmesg)
+	if [ -z "$ec" ] || [ $(( ec & 0x2 )) != 0 ]; then
+		for i in 1 2 3 4 5 6; do
+			skip "accel: post-reset state (premise absent: ctrl='$ec')"
+		done
+	else
+		ok "accel: hardware cleared endpoint BI"
+		if grep -q "BI disabled by reset" <<<"$dm"; then
+			ok "accel: kernel invalidates cxlds->bi"
+		else
+			fail "accel: kernel invalidates cxlds->bi"
+		fi
+		# The dead region blocks the decoder; its delete is also the
+		# admin remedy the decoder-loss dev_crit implies.
+		g "echo $region > /sys/bus/cxl/devices/$rd/delete_region" \
+			>/dev/null 2>&1
+		region2=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+		g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+		   echo $region2 > \$CXL/$rd/create_ram_region;
+		   R=\$CXL/$region2;
+		   echo 256 > \$R/interleave_granularity;
+		   echo 1 > \$R/interleave_ways;
+		   echo \$sz > \$R/size;
+		   echo 0 > \$CXL/$dec/dpa_size 2>/dev/null;
+		   echo ram > \$CXL/$dec/mode 2>/dev/null;
+		   echo \$sz > \$CXL/$dec/dpa_size" >/dev/null
+		if g "echo $dec > /sys/bus/cxl/devices/$region2/target0"; then
+			fail "accel: post-reset HDM-DB attach fails closed"
+		else
+			ok "accel: post-reset HDM-DB attach fails closed"
+		fi
+		g "echo $region2 > /sys/bus/cxl/devices/$rd/delete_region" \
+			>/dev/null 2>&1
+		# ...and the device-coherent-only gate closes the other
+		# window: nothing attachable remains on this device.
+		if [ -z "$rdh" ]; then
+			skip "accel: no HDM-H window left either (no plain window)"
+		else
+			region3=$(g "cat /sys/bus/cxl/devices/$rdh/create_ram_region")
+			g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+			   echo $region3 > \$CXL/$rdh/create_ram_region;
+			   R=\$CXL/$region3;
+			   echo 256 > \$R/interleave_granularity;
+			   echo 1 > \$R/interleave_ways;
+			   echo \$sz > \$R/size;
+			   echo 0 > \$CXL/$dec/dpa_size 2>/dev/null;
+			   echo ram > \$CXL/$dec/mode 2>/dev/null;
+			   echo \$sz > \$CXL/$dec/dpa_size" >/dev/null
+			if g "echo $dec > /sys/bus/cxl/devices/$region3/target0"
+			then
+				fail "accel: no HDM-H window left either"
+			else
+				ok "accel: no HDM-H window left either"
+			fi
+			g "echo $region3 > /sys/bus/cxl/devices/$rdh/delete_region" \
+				>/dev/null 2>&1
+		fi
+		# Full recovery: rebind, then the refused HDM-DB attach must
+		# work end to end again.
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+		for i in $(seq 1 30); do
+			g "test -e /sys/bus/pci/devices/$ep/driver" || break
+		done
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+		mem2=""
+		for i in $(seq 1 60); do
+			mem2=$(g "ls /sys/bus/pci/devices/$ep 2>/dev/null" | \
+				grep '^mem' | head -1)
+			[ -n "$mem2" ] && break
+		done
+		if [ -n "$mem2" ]; then
+			ok "accel: endpoint re-probed ($mem2)"
+		else
+			fail "accel: endpoint re-probed"
+		fi
+		dec2=$(g "for e in /sys/bus/cxl/devices/endpoint*; do
+				[ \"\$(basename \$(readlink -f \$e/uport))\" = $mem2 ] &&
+					basename \$(ls -d \$e/decoder*.0) && break
+			done")
+		region4=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+		g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+		   echo $region4 > \$CXL/$rd/create_ram_region;
+		   R=\$CXL/$region4;
+		   echo 256 > \$R/interleave_granularity;
+		   echo 1 > \$R/interleave_ways;
+		   echo \$sz > \$R/size;
+		   echo 0 > \$CXL/$dec2/dpa_size 2>/dev/null;
+		   echo ram > \$CXL/$dec2/mode 2>/dev/null;
+		   echo \$sz > \$CXL/$dec2/dpa_size;
+		   echo $dec2 > \$R/target0;
+		   echo 1 > \$R/commit" >/dev/null
+		if [ "$(g "cat /sys/bus/cxl/devices/$region4/commit" 2>/dev/null)" = 1 ]
+		then
+			ok "accel: rebind HDM-DB region commits again"
+		else
+			fail "accel: rebind HDM-DB region commits again"
+		fi
+	fi
+	dm=$(g dmesg)
+	grep -qE "WARNING:|BUG:" <<<"$dm" &&
+		fail "accel: no splat" || ok "accel: no splat"
+	oracle_silent "accel"
+	g dmesg > "$OUT/t27-accel.dmesg" 2>/dev/null
+fi
+
 exit $((FAIL != 0))
