@@ -4,7 +4,7 @@ Validation plan for the BI series (`cxl-bi-support-v8`) on **Type 3
 memory expanders that support Back-Invalidate** (devices that can
 operate HDM-DB).
 
-Companion to the QEMU suites in `topos/` (see `README.md`) and the
+Companion to the QEMU suites in `topos/` (see `../README.md`) and the
 `cxl_test` mock in `tools/testing/cxl/`. Those exercise the driver's
 logic exhaustively against emulation; this plan covers what emulation
 cannot answer and re-confirms the emulated invariants on silicon.
