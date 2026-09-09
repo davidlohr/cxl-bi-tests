@@ -12,6 +12,32 @@ Requires a kernel with CXL BI support and a QEMU providing `hdm-db`,
 `x-256b-flit` and `cxl-fmw.N.back-invalidate`. Suites that need other
 QEMU knobs skip themselves when the binary lacks them.
 
+## QEMU
+
+For full coverage build QEMU from the `cxl-bi-tests` branch of
+
+  https://github.com/davidlohr/qemu
+
+On top of the CXL Fixed Memory Window restriction flags, it carries
+the staging and fault-injection knobs the suites drive: `x-committed`,
+`x-committed-ways`, `x-committed-iw`, `x-bi-enabled`, `x-bi-committed`,
+`x-bi-fw-committed`, `x-bi-rt-committed`, `x-bi-commit-fault`,
+`x-bi-commit-fault-after`, `x-coherency-unknown`, guest writes to the
+HDM decoder BI bit, a faithful FLR, and the `cxl-accel` Type 2 device.
+
+Three of its changes are not knobs and cannot be worked around from
+the command line. CXL.mem is routed through switches at any depth,
+without which a region behind cascaded switches enumerates but never
+carries data (t9, t25, t31, t32, t33). The HDM decoder BI bit is
+writable in host bridge and upstream switch port decoders, which is
+where Table 9-13 has a downstream port look for it. And a guest
+secondary bus reset returns hardware defaults instead of re-applying
+the firmware staging, which is what lets t27 reset a firmware-adopted
+path.
+
+Anything else runs against stock QEMU, with the affected scenarios
+reporting themselves as skipped.
+
 ## Topologies
 
 Thirty-four topology scripts under `topos/`, each varying one axis so the
@@ -69,7 +95,7 @@ Environment variables consumed by `topo-lib.sh`:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `QEMU` | `$HOME/code/qemu-upstream/build/qemu-system-x86_64` | QEMU binary. |
+| `QEMU` | `$HOME/code/qemu-upstream/build/qemu-system-x86_64` | QEMU binary; see [QEMU](#qemu) for the tree to build. |
 | `KERNEL` | `$HOME/code/linux-torvalds/arch/x86/boot/bzImage` | bzImage with CXL BI support enabled. |
 | `IMG` | `$HOME/img/cxl-test.qcow2` | Guest rootfs. |
 | `ROOTDEV` | `/dev/sda1` | Guest root partition. |
