@@ -148,7 +148,7 @@ else
 	else
 		fail "adopt: endpoint disabled on unbind"
 	fi
-	if grep -qE "WARNING:|BUG:" <<<"$dm"; then
+	if grep -qE "$SPLAT_RE" <<<"$dm"; then
 		fail "adopt: no splat across teardown"
 	else
 		ok "adopt: no splat across teardown"
@@ -271,7 +271,7 @@ else
 	else
 		fail "fresh-dev: dealloc commit ran ($n1 -> $n2)"
 	fi
-	if grep -qE "WARNING:|BUG:" <<<"$dm"; then
+	if grep -qE "$SPLAT_RE" <<<"$dm"; then
 		fail "fresh-dev: no splat across teardown"
 	else
 		ok "fresh-dev: no splat across teardown"
@@ -385,6 +385,18 @@ fi
 #      level upward the driver is enabling something new (Table 8-152,
 #      Table 8-156). Without that rule this boot commits twice instead
 #      of four times.
+#   6. fw-shared-rp: TWO firmware-enabled endpoints under one switch.
+#      Each has its own DSP; the only level they share is the root
+#      port, which the first endpoint programmed (qemu cannot stage an
+#      RP). nr_bi refuses adoption there for the second endpoint, but
+#      the value is already in place and a root port never commits
+#      (Table 8-156): zero commit cycles, both endpoints adopt.
+#   7. fw-shared-dsp: the same two endpoints under an INNER switch, so
+#      they share the outer transit DSP. The first endpoint adopts it;
+#      the second is refused there by nr_bi and, from that level up,
+#      programs and commits as for a new device: exactly two commit
+#      cycles, the transit decoder and the outer route table, none on
+#      the adjacent DSPs, and both endpoints still adopt.
 launch_fw() { # launch_fw <inner-usp-extra>
 	launch_qemu \
 	  -object memory-backend-ram,id=m0,size=1G \
@@ -468,6 +480,168 @@ else
 	fi
 	oracle_silent "fw-partial"
 	g dmesg > "$OUT/t24-fw-partial.dmesg" 2>/dev/null
+fi
+
+# --- scenarios 6-7: two firmware-enabled endpoints sharing a level --
+# nr_bi counts every endpoint routed through a level, adopted or
+# programmed alike, so the SECOND firmware-enabled endpoint is always
+# refused adoption at a level the first one already holds. What that
+# refusal costs depends on what the shared level is.
+launch_shared_rp() {
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -object memory-backend-ram,id=m1,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-downstream,port=1,bus=us0,id=dsp1,chassis=0,slot=5,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-type3,bus=dsp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+}
+
+launch_shared_dsp() {
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -object memory-backend-ram,id=m1,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-fw-committed=on \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-downstream,port=1,bus=us1,id=dsp2,chassis=0,slot=7,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -device cxl-type3,bus=dsp2,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+}
+
+# adjacent_kept_enable <tag> <memdev>: the DSP right above <memdev>
+# still has Enable (ctrl & 3 == 2), SKIP without /dev/mem.
+adjacent_kept_enable() {
+	local path adj actl
+	path=$(g "readlink -f /sys/bus/cxl/devices/$2")
+	adj=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	read -r _ actl _ <<<"$(bi_regs "$adj" 0xC)"
+	if [ -z "$actl" ]; then
+		skip "$1: $2 adjacent kept Enable (no /dev/mem)"
+	elif [ $(( actl & 0x3 )) = 2 ]; then
+		ok "$1: $2 adjacent kept Enable"
+	else
+		fail "$1: $2 adjacent role changed ($actl)"
+	fi
+}
+
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-bi-enabled" ||
+   ! "$QEMU" -device cxl-downstream,help 2>/dev/null | \
+		grep -q "x-bi-committed"; then
+	for i in $(seq 1 8); do
+		skip "fw-shared-rp: qemu lacks x-bi-enabled/x-bi-committed"
+	done
+else
+	launch_shared_rp || { fail "fw-shared-rp: launch"; exit 1; }
+	if wait_for_guest 180; then
+		ok "fw-shared-rp: guest booted"
+	else
+		fail "fw-shared-rp: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	nad=$(grep -c 'adopting firmware-enabled BI' <<<"$dm")
+	if [ "$nad" = 2 ]; then
+		ok "fw-shared-rp: both endpoints adopted"
+	else
+		fail "fw-shared-rp: both endpoints adopted (got $nad)"
+	fi
+	nc=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+	if [ "$nc" = 0 ]; then
+		ok "fw-shared-rp: zero commit cycles, shared level is the RP"
+	else
+		fail "fw-shared-rp: zero commit cycles (got $nc)"
+	fi
+	if grep -q "BI setup failed" <<<"$dm"; then
+		fail "fw-shared-rp: no setup failure"
+	else
+		ok "fw-shared-rp: no setup failure"
+	fi
+	nmem=$(g 'ls /sys/bus/cxl/devices/ | grep -c ^mem')
+	if [ "$nmem" = 2 ]; then
+		ok "fw-shared-rp: both endpoints enumerated"
+	else
+		fail "fw-shared-rp: both endpoints enumerated (got $nmem)"
+	fi
+	adjacent_kept_enable "fw-shared-rp" mem0
+	adjacent_kept_enable "fw-shared-rp" mem1
+	oracle_silent "fw-shared-rp"
+	g dmesg > "$OUT/t24-fw-shared-rp.dmesg" 2>/dev/null
+fi
+
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-bi-enabled" ||
+   ! "$QEMU" -device cxl-downstream,help 2>/dev/null | \
+		grep -q "x-bi-fw-committed"; then
+	for i in $(seq 1 11); do
+		skip "fw-shared-dsp: qemu lacks x-bi-enabled/x-bi-fw-committed"
+	done
+else
+	launch_shared_dsp || { fail "fw-shared-dsp: launch"; exit 1; }
+	if wait_for_guest 180; then
+		ok "fw-shared-dsp: guest booted"
+	else
+		fail "fw-shared-dsp: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	nad=$(grep -c 'adopting firmware-enabled BI' <<<"$dm")
+	if [ "$nad" = 2 ]; then
+		ok "fw-shared-dsp: both endpoints adopted"
+	else
+		fail "fw-shared-dsp: both endpoints adopted (got $nad)"
+	fi
+	nc=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+	if [ "$nc" = 2 ]; then
+		ok "fw-shared-dsp: exactly two commit cycles for the second endpoint"
+	else
+		fail "fw-shared-dsp: exactly two commit cycles (got $nc)"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem1')
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	outer=$(awk -F/ '{print $(NF-5)}' <<<"$path")
+	oport=$(grep -o "pcieport $outer: port[0-9]* added" <<<"$dm" | \
+		awk '{print $3}')
+	if grep -q "pcieport $transit: BI-ID commit wait" <<<"$dm"; then
+		ok "fw-shared-dsp: the shared transit decoder committed"
+	else
+		fail "fw-shared-dsp: the shared transit decoder committed"
+	fi
+	if [ -n "$oport" ] && \
+	   grep -q "cxl_port $oport: BI-ID commit wait" <<<"$dm"; then
+		ok "fw-shared-dsp: the outer route table committed"
+	else
+		fail "fw-shared-dsp: the outer route table committed ($oport)"
+	fi
+	nadj=$(grep 'BI-ID commit wait' <<<"$dm" | \
+		grep -vc "pcieport $transit\|cxl_port $oport")
+	if [ "$nadj" = 0 ]; then
+		ok "fw-shared-dsp: nothing below the shared level committed"
+	else
+		fail "fw-shared-dsp: nothing below the shared level committed ($nadj)"
+	fi
+	if grep -q "BI setup failed" <<<"$dm"; then
+		fail "fw-shared-dsp: no setup failure"
+	else
+		ok "fw-shared-dsp: no setup failure"
+	fi
+	read -r _ tctl _ <<<"$(bi_regs "$transit" 0xC)"
+	if [ -z "$tctl" ]; then
+		skip "fw-shared-dsp: transit kept Forward (no /dev/mem)"
+	elif [ $(( tctl & 0x3 )) = 1 ]; then
+		ok "fw-shared-dsp: transit kept Forward"
+	else
+		fail "fw-shared-dsp: transit role changed ($tctl)"
+	fi
+	adjacent_kept_enable "fw-shared-dsp" mem0
+	adjacent_kept_enable "fw-shared-dsp" mem1
+	oracle_silent "fw-shared-dsp"
+	g dmesg > "$OUT/t24-fw-shared-dsp.dmesg" 2>/dev/null
 fi
 
 exit $((FAIL != 0))
