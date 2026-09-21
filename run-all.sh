@@ -35,6 +35,35 @@ tap_fold_fail() {
 		}' "$tap" > "$tap.tmp" && mv "$tap.tmp" "$tap"
 }
 
+# kmemleak_scan <suite>
+# kmemleak reports only objects older than its minimum age and only
+# after a scan, so settle, scan twice (the first pass primes), and
+# keep whatever it says as a diagnostic. Not a failure: a stock kernel
+# reports leaks of its own, so the report is evidence to read rather
+# than a verdict. Always says which of the three states it found -
+# a silent no-op would be indistinguishable from a clean scan.
+kmemleak_scan() {
+	local suite=$1 n
+	if ! guest_ssh "test -e /sys/kernel/debug/kmemleak ||
+			mount -t debugfs none /sys/kernel/debug 2>/dev/null;
+			test -e /sys/kernel/debug/kmemleak" 2>/dev/null; then
+		echo "# kmemleak: unavailable (no debugfs entry in the guest)"
+		return 0
+	fi
+	guest_ssh "sleep 7; echo scan > /sys/kernel/debug/kmemleak;
+		   sleep 7; echo scan > /sys/kernel/debug/kmemleak" \
+		>/dev/null 2>&1
+	guest_ssh "cat /sys/kernel/debug/kmemleak" > "$OUT/$suite.kmemleak" \
+		2>/dev/null
+	n=$(grep -c 'unreferenced object' "$OUT/$suite.kmemleak" 2>/dev/null)
+	if [ "${n:-0}" -eq 0 ]; then
+		rm -f "$OUT/$suite.kmemleak"
+		echo "# kmemleak: clean"
+	else
+		echo "# kmemleak: $n unreferenced object(s) -> $suite.kmemleak"
+	fi
+}
+
 # tap_verdict <tapfile>
 # Echo a suite's final plan and summary. Called once the host-side
 # checks have been folded in: the guest writes its own trailer before
@@ -165,6 +194,7 @@ run_suite() { # run_suite <topo-script> <suite>
 			      "$RUNDIR/oracle.diag"
 		TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
+	kmemleak_scan "$suite"
 	tap_verdict "$OUT/$suite.tap"
 	stop_qemu
 }
