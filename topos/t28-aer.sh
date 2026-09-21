@@ -59,7 +59,7 @@ splat_check() {
 	local tag=$1 dm=$2 w c
 	w=$(grep -c "WARNING" <<<"$dm")
 	c=$(grep -c "WARNING: possible circular locking" <<<"$dm")
-	if grep -qE "BUG:" <<<"$dm"; then
+	if grep -qE "$SPLAT_FATAL_RE" <<<"$dm"; then
 		fail "$tag: no splat"
 	elif [ "$w" = 0 ]; then
 		ok "$tag: no splat"

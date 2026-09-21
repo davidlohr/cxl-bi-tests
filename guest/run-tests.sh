@@ -21,6 +21,15 @@
 
 SUITE=${1:-t2}
 CXL=/sys/bus/cxl/devices
+# One definition of "a splat", so enabling a new debug option does not
+# quietly go undetected. SPLAT_RE is every report the debug configs can
+# emit; UBSAN and "kernel BUG at" carry neither a BUG: nor a WARNING:
+# prefix, and the kmemleak lines catch the detector switching itself
+# off - which would otherwise read as a clean scan.
+SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate'
+# BUG-class only, for checks that tolerate an expected WARNING.
+SPLAT_FATAL_RE='BUG:|Oops|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic'
+
 PASS=0; FAIL=0; N=0
 
 ok()   { N=$((N+1)); PASS=$((PASS+1)); echo "ok $N - $1"; }
@@ -1139,7 +1148,8 @@ t18)	# concurrency storm on the t5 topology (two EPs, shared USP/RP).
 	[ -n "$region" ] && destroy_region "$region"
 
 	# Hygiene sweep over the whole storm window.
-	for pat in "WARNING:" "BUG:" "possible circular" "refcount_t" \
+	for pat in "WARNING:" "BUG:" "UBSAN:" "kernel BUG at" \
+		   "possible circular" "refcount_t" \
 		   "BI setup failed" "Failed to request region" \
 		   "mismatch decoder type"; do
 		if dmesg | grep -q "$pat"; then
@@ -1440,7 +1450,7 @@ t31)	# 4-way and 8-way HDM-DB interleave under one switch, then the
 	fi
 	expect_eq "surviving endpoint still in BI" \
 		"$(bis "$(ep_decoder_for_mem "$(mem_for_bdf "${bdfs[7]}")")")" 0
-	if dmesg | grep -qE "BI dport disable failed|BI setup failed|WARNING:|BUG:"; then
+	if dmesg | grep -qE "BI dport disable failed|BI setup failed|$SPLAT_RE"; then
 		fail "no BI errors across seven releases"
 	else
 		ok "no BI errors across seven releases"
@@ -1715,7 +1725,7 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 			sleep 0.05
 		done
 		expect_eq "no splat across unbind/reset races" \
-			"$(dmesg | grep -cE 'BUG:|Oops|WARNING:|Unable to handle')" 0
+			"$(dmesg | grep -cE "$SPLAT_RE")" 0
 		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
 		dec=$(wait_ep_bdf "$bdf" 60)
 		[ -n "$dec" ] && ok "endpoint back after the races" \

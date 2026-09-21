@@ -159,7 +159,7 @@ g "sz=\$((256<<20)); echo ram > $CXL/$dec3/mode;
 	ok "type3 control commits on the same HDM-H window" ||
 	fail "type3 control commits on the same HDM-H window"
 
-if g dmesg | grep -qE "WARNING:|BUG:"; then
+if g dmesg | grep -qE "$SPLAT_RE"; then
 	fail "no splat"
 else
 	ok "no splat"

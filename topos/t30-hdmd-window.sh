@@ -99,7 +99,7 @@ if grep -q "coherency model not permitted" <<<"$dm"; then
 else
 	ok "hdm-d: no window refusal for the legal placement"
 fi
-grep -qE "WARNING:|BUG:" <<<"$dm" &&
+grep -qE "$SPLAT_RE" <<<"$dm" &&
 	fail "hdm-d: no splat" || ok "hdm-d: no splat"
 g dmesg > "$OUT/t30-hdmd.dmesg" 2>/dev/null
 
@@ -136,7 +136,7 @@ if grep -q "failed to add to region" <<<"$dm"; then
 else
 	fail "refusal: discovery reported the refusal"
 fi
-grep -qE "WARNING:|BUG:" <<<"$dm" &&
+grep -qE "$SPLAT_RE" <<<"$dm" &&
 	fail "refusal: no splat" || ok "refusal: no splat"
 g dmesg > "$OUT/t30-refusal.dmesg" 2>/dev/null
 
@@ -174,7 +174,7 @@ if grep -q "failed to add to region" <<<"$dm"; then
 else
 	fail "refusal2: discovery reported the refusal"
 fi
-grep -qE "WARNING:|BUG:" <<<"$dm" &&
+grep -qE "$SPLAT_RE" <<<"$dm" &&
 	fail "refusal2: no splat" || ok "refusal2: no splat"
 g dmesg > "$OUT/t30-refusal2.dmesg" 2>/dev/null
 

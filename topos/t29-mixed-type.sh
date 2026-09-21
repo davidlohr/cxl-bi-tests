@@ -111,7 +111,7 @@ done <<< "$tbl"
 	fail "every device commits HDM-DB, bi=1"
 [ "$alltt" = 1 ] && ok "every HDM-DB decoder inherits target_type=accelerator" ||
 	fail "target_type=accelerator on all"
-g dmesg | grep -qE "WARNING:|BUG:" && fail "leg1: no splat" || ok "leg1: no splat"
+g dmesg | grep -qE "$SPLAT_RE" && fail "leg1: no splat" || ok "leg1: no splat"
 
 # tear the singletons down before the interleave leg
 while read mn ty sw dec; do
@@ -143,7 +143,7 @@ else
 		ok "both interleave targets bi=1 (type3 and type2)" ||
 		fail "both interleave targets bi=1"
 	g "echo 0 > $CXL/$reg/commit; echo $reg > $CXL/$bi_rd/delete_region" >/dev/null 2>&1
-	g dmesg | grep -qE "WARNING:|BUG:" && fail "leg2: no splat" || ok "leg2: no splat"
+	g dmesg | grep -qE "$SPLAT_RE" && fail "leg2: no splat" || ok "leg2: no splat"
 fi
 
 # --- teardown hygiene -----------------------------------------------

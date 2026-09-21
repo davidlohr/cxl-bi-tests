@@ -183,11 +183,11 @@ if [ "$(dmesg_count 'BI requests disabled')" -ge 1 ]; then
 else
 	fail "BI disabled during hot-remove teardown"
 fi
-if [ "$(g dmesg | grep -cE 'WARNING:|BUG:|possible circular')" = 0 ]; then
+if [ "$(g dmesg | grep -cE "$SPLAT_RE")" = 0 ]; then
 	ok "no WARN/BUG/lockdep splat across hot-remove"
 else
 	fail "no WARN/BUG/lockdep splat across hot-remove"
-	g dmesg | grep -E "WARNING:|BUG:|possible circular" | head -3 | \
+	g dmesg | grep -E "$SPLAT_RE" | head -3 | \
 		sed 's/^/# /'
 fi
 # Survivor: the USP/RP must still be BI-enabled for sn=0x172 (nr_bi),

@@ -230,7 +230,7 @@ else
 		fail "shared: RP cleared last-out ($(role "$rp"))"
 fi
 dm=$(g dmesg)
-grep -qE "WARNING:|BUG:" <<<"$dm" &&
+grep -qE "$SPLAT_RE" <<<"$dm" &&
 	fail "shared: no splat across teardown" ||
 	ok "shared: no splat across teardown"
 oracle_silent "shared"

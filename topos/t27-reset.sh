@@ -332,7 +332,7 @@ else
 	fi
 fi
 
-if grep -qE "WARNING:|BUG:" <<<"$dm"; then
+if grep -qE "$SPLAT_RE" <<<"$dm"; then
 	fail "no-region: no splat across the reset"
 else
 	ok "no-region: no splat across the reset"
@@ -408,7 +408,7 @@ if grep -q "BI disabled by reset" <<<"$dm"; then
 else
 	fail "with-region: BI invalidation reported alongside"
 fi
-if grep -qE "BUG:" <<<"$dm"; then
+if grep -qE "$SPLAT_FATAL_RE" <<<"$dm"; then
 	fail "with-region: no BUG across the reset"
 else
 	ok "with-region: no BUG across the reset"
@@ -593,7 +593,7 @@ else
 		fail "switch: unbind unwinds the RP ($rctl2)"
 fi
 dm=$(g dmesg)
-grep -qE "WARNING:|BUG:" <<<"$dm" &&
+grep -qE "$SPLAT_RE" <<<"$dm" &&
 	fail "switch: no splat" || ok "switch: no splat"
 if [ "$(grep -c 'CXL BI oracle' "$RUNDIR/qemu.log" 2>/dev/null)" = 0 ]; then
 	ok "switch: qemu BI oracle silent"
@@ -697,7 +697,7 @@ else
 		fi
 	fi
 	dm=$(g dmesg)
-	grep -qE "WARNING:|BUG:" <<<"$dm" &&
+	grep -qE "$SPLAT_RE" <<<"$dm" &&
 		fail "adopt-reset: no splat" || ok "adopt-reset: no splat"
 	oracle_silent "adopt-reset"
 	g dmesg > "$OUT/t27-adopt-reset.dmesg" 2>/dev/null
@@ -880,7 +880,7 @@ else
 		fi
 	fi
 	dm=$(g dmesg)
-	grep -qE "WARNING:|BUG:" <<<"$dm" &&
+	grep -qE "$SPLAT_RE" <<<"$dm" &&
 		fail "accel: no splat" || ok "accel: no splat"
 	oracle_silent "accel"
 	g dmesg > "$OUT/t27-accel.dmesg" 2>/dev/null

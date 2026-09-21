@@ -4,6 +4,15 @@
 # Usage: source this file, then call launch_qemu with topology device args.
 #        Guest reachable via: guest_ssh <cmd>
 
+# One definition of "a splat", so enabling a new debug option does not
+# quietly go undetected. SPLAT_RE is every report the debug configs can
+# emit; UBSAN and "kernel BUG at" carry neither a BUG: nor a WARNING:
+# prefix, and the kmemleak lines catch the detector switching itself
+# off - which would otherwise read as a clean scan.
+SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate'
+# BUG-class only, for checks that tolerate an expected WARNING.
+SPLAT_FATAL_RE='BUG:|Oops|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic'
+
 # Configuration (override by exporting before sourcing; see README).
 QEMU=${QEMU:-$HOME/code/qemu-upstream/build/qemu-system-x86_64}
 KERNEL=${KERNEL:-$HOME/code/linux-torvalds/arch/x86/boot/bzImage}
