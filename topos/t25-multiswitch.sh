@@ -17,7 +17,16 @@
 #      OUTER (transit) DSP. The adjacent level enables and commits
 #      first (9.14.2 allocate order); the transit commit failure must
 #      unwind it - measured by register readback, not inferred.
-#   3. deep: three switch levels. The walk is depth-agnostic: caps
+#   3. adopt-rollback: scenario 2's cascade with the lower half staged
+#      by firmware - device BI Enable set, adjacent DSP Enabled and
+#      committed, inner switch route table committed. The walk adopts
+#      the adjacent level (no write, no commit) and only the outer
+#      transit is programmed, where the commit faults. Unwinding must
+#      leave the adopted level exactly as firmware had it: the driver
+#      never wrote it, and the device below still has BI Enable set.
+#      Scenario 2 is the contrast, where nothing is adopted and the
+#      adjacent level is cleared.
+#   4. deep: three switch levels. The walk is depth-agnostic: caps
 #      and commits scale with depth and the roles land by position.
 #
 # Host-driven multi-boot suite (t23/t24 style).
@@ -286,7 +295,69 @@ else
 	g dmesg > "$OUT/t25-rollback.dmesg" 2>/dev/null
 fi
 
-# --- scenario 3: three switch levels ---------------------------------
+# --- scenario 3: adopted prefix survives a rollback ------------------
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-bi-enabled" ||
+   ! "$QEMU" -device cxl-downstream,help 2>/dev/null | grep -q "x-bi-committed" ||
+   ! "$QEMU" -device cxl-upstream,help 2>/dev/null | grep -q "x-bi-rt-committed" ||
+   ! "$QEMU" -device cxl-downstream,help 2>/dev/null | grep -q "x-bi-commit-fault"
+then
+	for i in $(seq 1 8); do
+		skip "adopt-rollback: qemu lacks the BI staging knobs"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-commit-fault=error \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-bi-enabled=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	if wait_for_guest 180; then
+		ok "adopt-rollback: guest booted"
+	else
+		fail "adopt-rollback: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	grep -qE "BI-ID commit rejected by hardware" <<<"$dm" &&
+		ok "adopt-rollback: transit commit diagnostic" ||
+		fail "adopt-rollback: transit commit diagnostic"
+	grep -q "BI setup failed" <<<"$dm" &&
+		ok "adopt-rollback: BI setup refused" ||
+		fail "adopt-rollback: BI setup refused"
+	if [ "$(g 'cat /sys/bus/cxl/devices/endpoint*/decoder*.0/back_invalidate')" = 0 ]
+	then
+		ok "adopt-rollback: endpoint bi=0"
+	else
+		fail "adopt-rollback: endpoint bi=0"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	adj=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	rp=$(awk -F/ '{print $(NF-6)}' <<<"$path")
+	if [ -z "$(role "$adj")" ]; then
+		for i in 1 2 3; do
+			skip "adopt-rollback: register truth (no /dev/mem)"
+		done
+	else
+		# adopted, so this driver never wrote it: firmware's Enable stands
+		[ "$(role "$adj")" = 2 ] &&
+			ok "adopt-rollback: adopted level left as firmware had it" ||
+			fail "adopt-rollback: adopted level left as firmware had it ($(role "$adj"))"
+		[ "$(role "$transit")" = 0 ] &&
+			ok "adopt-rollback: faulted transit restored" ||
+			fail "adopt-rollback: faulted transit restored ($(role "$transit"))"
+		[ "$(role "$rp")" = 0 ] &&
+			ok "adopt-rollback: RP never reached" ||
+			fail "adopt-rollback: RP never reached ($(role "$rp"))"
+	fi
+	oracle_silent "adopt-rollback"
+	g dmesg > "$OUT/t25-adopt-rollback.dmesg" 2>/dev/null
+fi
+
+# --- scenario 4: three switch levels ---------------------------------
 launch_qemu \
   -object memory-backend-ram,id=m0,size=1G \
   -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
