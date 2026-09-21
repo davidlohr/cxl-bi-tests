@@ -132,6 +132,20 @@ run_suite() { # run_suite <topo-script> <suite>
 		[ "$rc2" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
 
+	# t5 phase 3 unbinds a member of the committed 2-way region, the
+	# only shape that runs the teardown through cxl_region_decode_reset()
+	# on every target and a dport the surviving peer still holds.
+	if [ "$suite" = t5 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t5 phase 3: committed multi-target member unbind ---"
+		guest_scp "$BI_TESTS_DIR/guest/multitarget-unbind-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "dmesg -C; bash /tmp/multitarget-unbind-phase.sh" \
+			| tee "$OUT/t5-mtunbind.tap"
+		local rc3=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t5-mtunbind.dmesg" 2>/dev/null
+		[ "$rc3" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
 	[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 
 	# The qemu BI oracle (-d guest_errors, "CXL BI oracle" messages)

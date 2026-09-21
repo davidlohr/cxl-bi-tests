@@ -18,6 +18,10 @@
 #   - Phase 2 (nr_bi refcount) hot-removes one memdev and verifies
 #     the RP's BI stays enabled for the surviving endpoint; removing
 #     the second releases the RP.
+#   - Phase 3 (multi-target member unbind) unbinds an endpoint that is
+#     a member of the committed 2-way region, so the teardown runs
+#     cxl_region_decode_reset() over every target and walks a dport
+#     the surviving peer still holds.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 
