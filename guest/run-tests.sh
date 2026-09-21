@@ -1777,6 +1777,108 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 		skip_qemu_gap 7 "no cxl_bus reset method"
 		destroy_region "$R" "$rd"
 	fi
+
+	# --- arm 4: BI Enable lost after the region's cxlds->bi check but
+	# before the decoder is programmed. biclear stands in for a reset
+	# whose .reset_done has not run yet, so cxlds->bi still says enabled
+	# and only the hardware knows better. The commit must re-check the
+	# device after programming the decoder and back it out.
+	v=$(creg "$bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 7 "no /dev/mem MMIO for BI Decoder Control"
+	else
+		R=$(create_region "$rd" 1 256 "$mem")
+		[ -n "$R" ] && ok "region attached with BI enabled" \
+			|| { fail "region attached with BI enabled"; exit 1; }
+		creg "$bdf" biclear >/dev/null
+		expect_eq "BI Enable cleared behind the driver, cxlds->bi still set" \
+			"$(cat "$CXL/$dec/back_invalidate")" 1
+		dmesg -C
+		if commit_region "$R" 2>/dev/null; then
+			fail "commit refused when the device lost BI Enable"
+		else
+			ok "commit refused when the device lost BI Enable"
+		fi
+		check "refusal comes from the decoder commit" \
+			dmesg_saw "BI disabled by reset during commit"
+		v=$(creg "$bdf" hdmbi)
+		if [ -z "$v" ]; then
+			ok "no endpoint decoder left committed with BI"
+		else
+			fail "no endpoint decoder left committed with BI (hdmbi=$v)"
+		fi
+		expect_eq "region left uncommitted" "$(cat "$CXL/$R/commit")" 0
+		destroy_region "$R" "$rd"
+		# let the endpoint teardown's deferred detach_memdev() drain
+		# before rebinding, or it releases the new binding (see arm 5)
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
+		sleep 0.5
+		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+		dec=$(wait_ep_bdf "$bdf" 60)
+		[ -n "$dec" ] && ok "endpoint back after the recovery rebind" \
+			|| fail "endpoint back after the recovery rebind"
+	fi
+
+	# --- arm 5: the race itself, an SBR while a commit is in flight.
+	# Each pass attaches, commits in the background and fires a
+	# cxl_bus reset at it. Every pass must end in one of two legal
+	# states: the commit refused (the region commit re-checked the
+	# device's BI Enable and backed out), or the commit done before
+	# the reset and .reset_done flagging the wiped decoder. What must
+	# never appear is a decoder committed with BI on a device whose
+	# BI Enable reads 0 - the silent state the v8 review predicted.
+	# The window is microseconds wide, so this is best effort; the
+	# deterministic reproducer lives in cxl-bi-repro.
+	v=$(creg "$bdf" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 3 "no /dev/mem MMIO for BI Decoder Control"
+	elif ! echo cxl_bus > "/sys/bus/pci/devices/$bdf/reset_method" 2>/dev/null; then
+		skip_qemu_gap 3 "no cxl_bus reset method"
+	else
+		passes=10
+		mismatch=0; refused=0; timedout=0; flagged=0; other=0; n=0
+		splats=0
+		for i in $(seq 1 "$passes"); do
+			R=$(create_region "$rd" 1 256 "$mem")
+			[ -n "$R" ] || break
+			n=$((n+1)); dmesg -C
+			( echo 1 > "$CXL/$R/commit" 2>/dev/null; echo $? > /tmp/t34-rc ) &
+			echo 1 > "/sys/bus/pci/devices/$bdf/reset" 2>/dev/null
+			wait
+			rc=$(cat /tmp/t34-rc)
+			ben=$(( $(creg "$bdf" bictrl) & 2 ))
+			hb=$(creg "$bdf" hdmbi)
+			if [ "$hb" = 1 ] && [ "$ben" = 0 ]; then
+				mismatch=$((mismatch+1))
+				echo "# pass $i: decoder committed with BI, BI Enable=0"
+			elif dmesg_saw "BI disabled by reset during commit"; then
+				refused=$((refused+1))
+			elif [ "$rc" != 0 ]; then
+				timedout=$((timedout+1))
+			elif dmesg_saw "SBR happened without memory regions removal"; then
+				flagged=$((flagged+1))
+			else
+				other=$((other+1))
+			fi
+			destroy_region "$R" "$rd"
+			# Tearing the endpoint down queues detach_memdev() on the
+			# cxl workqueue (cxl_endpoint_port_probe's schedule_detach
+			# devres action); a rebind that lands before it runs is
+			# released by it. Let it drain before binding again.
+			echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
+			sleep 0.5
+			echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
+			dec=$(wait_ep_bdf "$bdf" 60)
+			splats=$((splats + $(dmesg | grep -cE "$SPLAT_RE")))
+			[ -n "$dec" ] || break
+		done
+		echo "# arm 5: $n passes: refused=$refused timedout=$timedout flagged=$flagged other=$other mismatch=$mismatch"
+		expect_eq "no decoder committed with BI on a device with BI Enable=0 ($n passes)" \
+			"$mismatch" 0
+		expect_eq "no splat across the commit/reset races" "$splats" 0
+		[ -n "$dec" ] && ok "endpoint back after the races" \
+			|| fail "endpoint back after the races"
+	fi
 	;;
 esac
 

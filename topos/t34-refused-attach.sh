@@ -29,6 +29,16 @@
 #     .reset_done invalidates cxlds->bi, and the commit must then be
 #     refused rather than program the endpoint decoder with BI on a
 #     device whose BI Enable is 0. Recovery by rebind commits again.
+#   - BI Enable lost after the region's cxlds->bi check but before the
+#     decoder is programmed: cleared behind the driver between attach
+#     and commit (a reset whose .reset_done has not run), so only the
+#     hardware knows. The decoder commit must re-check the device and
+#     back out; nothing may be left committed with BI.
+#   - The race itself: an SBR fired at an in-flight commit, in a loop.
+#     Every pass must end refused or flagged by .reset_done; never a
+#     decoder committed with BI on a device whose BI Enable is 0. The
+#     window is microseconds wide, so best effort; the deterministic
+#     reproducer with a widened window lives in cxl-bi-repro.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 
