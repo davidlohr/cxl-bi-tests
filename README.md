@@ -199,3 +199,15 @@ Failures map to specific root causes:
   converges through at most one recovery rebind per endpoint and
   reports it as a TAP diagnostic; only an unrecoverable memdev fails
   the suite.
+- The class-keyed HDM-H refusal ("HDM-H requires a Type 3 device",
+  `cxl_region_attach()` on `cxlds->type == CXL_DEVTYPE_DEVMEM`) is out
+  of reach from QEMU: every QEMU CXL endpoint model, `cxl-accel`
+  included, keeps the Type 3 class code and binds `cxl_pci`, which
+  registers every device as `CXL_DEVTYPE_CLASSMEM`. The accelerator
+  refusal t26 and t27 exercise is the HDM `supported_coherency` check,
+  and nothing in `cxl_region_attach()` would refuse a `cxl-accel` with
+  `x-coherency-unknown=on` from an HDM-H window (no topology tries it).
+  The class refusal is covered by ndctl's `test/cxl-back-invalidate.sh`
+  under `cxl_test type2_test=1`, whose mock accelerator is the only
+  Type 2 device available without hardware; the in-tree sfc CXL NIC
+  driver is the other `CXL_DEVTYPE_DEVMEM` registrant.
