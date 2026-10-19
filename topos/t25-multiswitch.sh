@@ -412,4 +412,120 @@ fi
 oracle_silent "deep"
 g dmesg > "$OUT/t25-deep.dmesg" 2>/dev/null
 
+# --- scenario 5: rollback across a level a survivor holds ------------
+# The rollback must not clear a level another endpoint is still using.
+# Three switch levels with two endpoints under the innermost one, so
+# both share the two transits. The OUTER transit faults its second
+# commit (x-bi-commit-fault-after=1): the first endpoint comes up
+# whole, the second gets its own adjacent DSP and the shared inner
+# transit, then fails above them. Its unwind must clear only what it
+# programmed for itself - the shared transit drops a reference and
+# keeps Forward, and the survivor keeps working.
+if ! "$QEMU" -device cxl-downstream,help 2>/dev/null |
+		grep -q "x-bi-commit-fault-after"; then
+	for i in $(seq 1 10); do
+		skip "shared-rollback: qemu lacks x-bi-commit-fault-after"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -object memory-backend-ram,id=m1,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-commit-fault=error,x-bi-commit-fault-after=1 \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on \
+	  -device cxl-upstream,bus=dsp1,id=us2,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us2,id=dsp2,chassis=0,slot=8,x-256b-flit=on \
+	  -device cxl-downstream,port=1,bus=us2,id=dsp3,chassis=0,slot=9,x-256b-flit=on \
+	  -device cxl-type3,bus=dsp2,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+	  -device cxl-type3,bus=dsp3,volatile-memdev=m1,id=mem1,x-256b-flit=on,hdm-db=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	if wait_for_guest 180; then
+		ok "shared-rollback: guest booted"
+	else
+		fail "shared-rollback: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	grep -q "BI-ID commit rejected by hardware" <<<"$dm" &&
+		ok "shared-rollback: outer transit commit diagnostic" ||
+		fail "shared-rollback: outer transit commit diagnostic"
+	grep -q "BI setup failed" <<<"$dm" &&
+		ok "shared-rollback: one endpoint refused" ||
+		fail "shared-rollback: one endpoint refused"
+	# One endpoint came up, one was refused. back_invalidate only
+	# tracks region membership, so name them from the enable line.
+	enbdf=$(sed -n 's/.*cxl_pci \([0-9a-f:.]*\): BI requests enabled.*/\1/p' \
+		<<<"$dm" | head -1)
+	tbl=$(g 'for m in /sys/bus/cxl/devices/mem*; do
+			[ -e "$m" ] || continue
+			p=$(readlink -f $m)
+			echo "$(basename $p) $(basename $(dirname $p))"
+		 done')
+	echo "$tbl" | sed 's/^/# memdev: /'
+	up=$(awk -v b="$enbdf" '$2 == b { print $1 }' <<<"$tbl")
+	down=$(awk -v b="$enbdf" '$2 != b { print $1 }' <<<"$tbl")
+	if [ -n "$up" ] && [ -n "$down" ]; then
+		ok "shared-rollback: one endpoint BI enabled ($up), one not ($down)"
+	else
+		fail "shared-rollback: one endpoint BI enabled, one not (bdf='$enbdf' up='$up' down='$down')"
+	fi
+	pup=$(g "readlink -f /sys/bus/cxl/devices/$up")
+	pdown=$(g "readlink -f /sys/bus/cxl/devices/$down")
+	adj_up=$(awk -F/ '{print $(NF-2)}' <<<"$pup")
+	adj_down=$(awk -F/ '{print $(NF-2)}' <<<"$pdown")
+	inner=$(awk -F/ '{print $(NF-4)}' <<<"$pup")
+	outer=$(awk -F/ '{print $(NF-6)}' <<<"$pup")
+	rp=$(awk -F/ '{print $(NF-8)}' <<<"$pup")
+	echo "# up=$up($adj_up) down=$down($adj_down) inner=$inner outer=$outer rp=$rp"
+	if [ -z "$(role "$inner")" ]; then
+		for i in 1 2 3 4 5; do
+			skip "shared-rollback: register truth (no /dev/mem)"
+		done
+	else
+		[ "$(role "$inner")" = 1 ] &&
+			ok "shared-rollback: shared transit holds Forward" ||
+			fail "shared-rollback: shared transit cleared under the survivor ($(role "$inner"))"
+		[ "$(role "$adj_down")" = 0 ] &&
+			ok "shared-rollback: refused endpoint's adjacent cleared" ||
+			fail "shared-rollback: refused endpoint's adjacent cleared ($(role "$adj_down"))"
+		[ "$(role "$adj_up")" = 2 ] &&
+			ok "shared-rollback: survivor adjacent Enable" ||
+			fail "shared-rollback: survivor adjacent Enable ($(role "$adj_up"))"
+		[ "$(role "$outer")" = 1 ] &&
+			ok "shared-rollback: outer transit holds Forward" ||
+			fail "shared-rollback: outer transit ($(role "$outer"))"
+		[ "$(role "$rp")" = 1 ] && ok "shared-rollback: RP Forward" ||
+			fail "shared-rollback: RP Forward ($(role "$rp"))"
+	fi
+	# the survivor's path still works end to end
+	rd=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+			[ "$(cat $d/cap_back_invalidate 2>/dev/null)" = 1 ] &&
+				basename $d && break
+		done')
+	dec=$(g "for e in /sys/bus/cxl/devices/endpoint*; do
+			[ \"\$(basename \$(readlink -f \$e/uport))\" = $up ] || continue
+			basename \$(ls -d \$e/decoder*.0 | head -1); break
+		 done")
+	reg=$(g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+		 r=\$(cat \$CXL/$rd/create_ram_region)
+		 echo \$r > \$CXL/$rd/create_ram_region
+		 echo 256 > \$CXL/\$r/interleave_granularity
+		 echo 1 > \$CXL/\$r/interleave_ways
+		 echo \$sz > \$CXL/\$r/size
+		 echo ram > \$CXL/$dec/mode 2>/dev/null
+		 echo \$sz > \$CXL/$dec/dpa_size
+		 echo $dec > \$CXL/\$r/target0 && echo 1 > \$CXL/\$r/commit
+		 echo \$r")
+	[ "$(g "cat /sys/bus/cxl/devices/$reg/commit" 2>/dev/null)" = 1 ] &&
+		ok "shared-rollback: survivor commits an HDM-DB region" ||
+		fail "shared-rollback: survivor commits an HDM-DB region"
+	dm=$(g dmesg)
+	grep -qE "$SPLAT_RE" <<<"$dm" &&
+		fail "shared-rollback: no splat" || ok "shared-rollback: no splat"
+	oracle_silent "shared-rollback"
+	g dmesg > "$OUT/t25-shared-rollback.dmesg" 2>/dev/null
+fi
+
 exit $((FAIL != 0))
