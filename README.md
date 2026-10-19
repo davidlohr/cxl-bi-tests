@@ -63,6 +63,7 @@ for confirming it on Type 3 hardware is
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
 | **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
 | **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop (a CXL 4.0 §9.14.3 mixed configuration). Emits TAP `# SKIP` today — see Known limitations. |
+| **t35** | Switch USP not in 256B Flit, DSP and endpoint in it, BI + HDM-H CFMWS | The CXL 4.0 §9.14.3 mixed configuration t7/t8 cannot reach: a `cxl-upstream` is never re-synced from its child, so the capability walk stops at the USP ("BI not supported by USP"), the endpoint stays `bi=0`, an HDM-DB attach fails closed and an HDM-H region still commits on the plain window. |
 | **t9** | Cascaded switches (two switch pairs), BI + HDM-H CFMWS | BI works at any switch depth: an HDM-DB region creates and commits two switch hops down (endpoint `back_invalidate=1`), the capability walk finds four BI decoders, both route tables and a commit at each switch level, and an HDM-H region still commits across both switches. Phase 2 unbinds the outer switch port's driver with an HDM-H region committed: the devres cascade tears the child subtree down first and disables BI on the way, the emptied port is reaped, and a `cxl_mem` rebind re-enumerates the cascade and re-enables BI; a second cycle fires the unbind under region churn and a decoder reader. |
 | **t10** | Two endpoints under **different** RPs, BI CFMWS | Each RP gets its own independent BI setup; an HDM-DB region commits (2-way cross-RP when the root allows it, otherwise a per-RP 1-way). |
 | **t11** | Endpoint with persistent memdev, BI CFMWS | An HDM-DB PMEM region commits and the endpoint reports `bi=1`. |
@@ -174,10 +175,13 @@ Failures map to specific root causes:
   QEMU knob either: t21 stages it with a local QEMU modification that
   latches the BI commit past the advertised 2s timeout, and records
   itself as a SKIP on stock QEMU.
-- t7/t8 emit `# SKIP`: upstream QEMU's `x-256b-flit=off` is not
-  reflected in the `LnkCtl2` flit bit that `cxl_pci_flit_256()` reads.
-  When QEMU wires it through, both flip to strict fail-closed checks
-  with no code changes.
+- t7/t8 emit `# SKIP`: a downstream-facing port (`cxl-rp`,
+  `cxl-downstream`) re-syncs its `LnkSta2` flit bit from its child at
+  every link status read, so `x-256b-flit=off` on one is overwritten
+  and `cxl_pci_flit_256()` still sees 256B. A `cxl-upstream` is not
+  re-synced, which is what t35 uses to reach the same mixed
+  configuration one hop up. If QEMU ever stops re-syncing, t7/t8 flip
+  to strict fail-closed checks with no code changes.
 - t6 is indistinguishable from t2 until QEMU grows an `x-bi-rt=off`
   knob on `cxl-upstream`.
 - t13 greps QEMU's stderr for the launch refusal; adjust the regex if

@@ -643,6 +643,53 @@ t7)	# RP uplink not in 256B Flit mode. Expected: cxl_is_bi_capable
 	fi
 	;;
 
+# ---------------------------------------------------------------- t35
+t35)	# Switch USP not in 256B Flit, DSP and endpoint in it: the 9.14.3
+	# mixed configuration t7/t8 cannot reach. cxl_bi_probe_capable()
+	# stops at the USP hop, cxlds->bi_capable stays false, BI setup
+	# returns 0 without touching hardware, and an HDM-DB attach fails
+	# closed while an HDM-H region still commits.
+	check_cap_back_invalidate_present
+	if dmesg_saw "BI not supported by USP"; then
+		ok "capability walk stopped at the 68B USP"
+	else
+		fail "capability walk stopped at the 68B USP"
+	fi
+	if dmesg_saw "BI requests enabled"; then
+		fail "BI never enabled on the endpoint"
+	else
+		ok "BI never enabled on the endpoint"
+	fi
+	rd=$(root_decoder_bi)
+	[ -n "$rd" ] || { fail "no BI root decoder"; exit 1; }
+	mem=$(all_mems | head -1)
+	dec=$(ep_decoder_for_mem "$mem")
+	expect_eq "endpoint bi=0 behind a 68B USP" \
+		"$(cat "$CXL/$dec/back_invalidate")" 0
+	region=$(create_region "$rd" 1 256 "$mem")
+	if [ -n "$region" ]; then
+		fail "HDM-DB attach refused behind a 68B USP"
+		destroy_region "$region"
+	else
+		ok "HDM-DB attach refused behind a 68B USP"
+	fi
+	check "refusal names the device" dmesg_saw "BI not enabled on device"
+	# leftover region shell from the refused attach
+	for r in $CXL/region*; do [ -d "$r" ] && \
+		echo "$(basename "$r")" > "$CXL/$rd/delete_region" 2>/dev/null; done
+	rdh=$(root_decoder_nobi)
+	[ -n "$rdh" ] || { fail "no HDM-H root decoder"; exit 1; }
+	region=$(create_region "$rdh" 1 256 "$mem")
+	if [ -n "$region" ] && commit_region "$region" 2>/dev/null; then
+		ok "HDM-H region commits on the plain window"
+		expect_eq "endpoint stays bi=0 in the HDM-H region" \
+			"$(cat "$CXL/$dec/back_invalidate")" 0
+		destroy_region "$region"
+	else
+		fail "HDM-H region commits on the plain window"
+	fi
+	;;
+
 # ---------------------------------------------------------------- t8
 t8)	# DSP not in 256B Flit mode. BI walk's DSP check fails, cxlds->bi=0.
 	# Same QEMU limitation as t7: `x-256b-flit=off` on cxl-downstream
