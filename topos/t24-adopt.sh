@@ -33,8 +33,9 @@
 #      nothing is live and the path is deallocated device-first.
 #   9. fw-locked: scenario 8 plus Lock On Commit on the committed
 #      endpoint decoder. The mapping outlives the driver, so BI must
-#      too: nothing is released on unbind, and a rebind neither walks
-#      nor commits (cxlds->bi_locked).
+#      too: the device keeps BI Enable, each level of the path is
+#      marked rather than cleared, and a rebind adopts it all back
+#      with no write and no commit.
 #  10. fw-switch-locked: scenario 9 behind a switch, with a
 #      driver-enabled sibling under the same switch. qemu's x-committed
 #      cannot stage this (ct3d_committed_decoder_init needs direct
@@ -42,7 +43,8 @@
 #      path is committed by hand - host bridge, switch USP, and the
 #      endpoint with Lock On Commit. The shared root port must keep
 #      Forward when the sibling goes away and when the locked device
-#      itself unbinds: the locked device never releases its reference.
+#      itself unbinds: every reference is released, and the shared
+#      level is held for the locked device below it.
 # Each scenario ends with the qemu BI oracle silent, and 1-2 and 8-10
 # verify teardown through the adopted/programmed bookkeeping on unbind.
 set -o pipefail
@@ -831,7 +833,7 @@ PYEOF"
 }
 if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-committed"
 then
-	for i in $(seq 1 15); do
+	for i in $(seq 1 16); do
 		skip "fw-locked: qemu cxl-type3 lacks x-committed"
 	done
 else
@@ -858,7 +860,7 @@ else
 	rctl=$(bi_set_enable "$rp")
 	hctl=$(hdm_dec0 "$ep" lock)
 	if [ -z "$ectl" ] || [ -z "$rctl" ] || [ -z "$hctl" ]; then
-		for i in $(seq 1 13); do
+		for i in $(seq 1 14); do
 			skip "fw-locked: staging needs /dev/mem"
 		done
 	else
@@ -929,20 +931,27 @@ else
 		else
 			ok "fw-locked: no splat across teardown"
 		fi
-		# Rebind: the record persists, so setup neither walks nor commits
+		# Rebind: teardown released the references but kept the
+		# registers, so the walk adopts every level - no write, and
+		# no commit, which is what a path already up is owed
 		g "dmesg -C"
 		g "echo mem0 > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
 		wait_mem_driver bound
 		dm=$(g dmesg)
-		if grep -q "BI held by a locked decoder" <<<"$dm"; then
-			ok "fw-locked: rebind skips BI setup"
+		if [ "$(grep -c 'BI-ID commit wait took' <<<"$dm")" = 0 ]; then
+			ok "fw-locked: rebind owes no commit"
 		else
-			fail "fw-locked: rebind skips BI setup"
+			fail "fw-locked: rebind owes no commit"
 		fi
-		if grep -qE "adopting firmware-enabled BI|BI requests enabled" <<<"$dm"; then
-			fail "fw-locked: rebind neither adopts nor writes"
+		if grep -q "BI requests enabled" <<<"$dm"; then
+			fail "fw-locked: rebind writes nothing"
 		else
-			ok "fw-locked: rebind neither adopts nor writes"
+			ok "fw-locked: rebind writes nothing"
+		fi
+		if [ "$(g 'cat /sys/bus/cxl/devices/endpoint*/decoder*.0/back_invalidate 2>/dev/null | head -1')" = 1 ]; then
+			ok "fw-locked: HDM-DB still reported after the rebind"
+		else
+			fail "fw-locked: HDM-DB still reported after the rebind"
 		fi
 		read -r _ ectl _ <<<"$(bi_regs "$ep" 0xC)"
 		read -r _ rctl _ <<<"$(bi_regs "$rp" 0xC)"
@@ -1047,7 +1056,7 @@ PYEOF"
 if ! "$QEMU" -device cxl-downstream,help 2>/dev/null | grep -q "x-bi-committed" ||
    ! "$QEMU" -device pxb-cxl,help 2>/dev/null | grep -q "hdm_for_passthrough"
 then
-	for i in $(seq 1 19); do
+	for i in $(seq 1 21); do
 		skip "fw-switch-locked: qemu lacks the needed knobs"
 	done
 else
@@ -1070,7 +1079,7 @@ else
 	fi
 	read -r ep dsp usp rp hbport swport rpid dspid <<<"$(topo_ids)"
 	if [ -z "$dspid" ]; then
-		for i in $(seq 1 17); do
+		for i in $(seq 1 19); do
 			skip "fw-switch-locked: topology ids unreadable"
 		done
 	else
@@ -1087,7 +1096,7 @@ else
 		g "echo $hbport > /sys/bus/cxl/drivers/cxl_port/unbind" >/dev/null
 		read -r hbc uspc epc rpc <<<"$(stage_switch_path "$usp" "$ep" "$rp" "$rpid" "$dspid")"
 		if [ -z "$rpc" ]; then
-			for i in $(seq 1 16); do
+			for i in $(seq 1 18); do
 				skip "fw-switch-locked: staging needs /dev/mem"
 			done
 		else
@@ -1207,10 +1216,20 @@ else
 			g "echo mem0 > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
 			wait_mem_driver bound mem0
 			dm=$(g dmesg)
-			if grep -q "BI held by a locked decoder" <<<"$dm"; then
-				ok "fw-switch-locked: rebind skips BI setup"
+			if [ "$(grep -c 'BI-ID commit wait took' <<<"$dm")" = 0 ]; then
+				ok "fw-switch-locked: rebind owes no commit"
 			else
-				fail "fw-switch-locked: rebind skips BI setup"
+				fail "fw-switch-locked: rebind owes no commit"
+			fi
+			if grep -q "BI requests enabled" <<<"$dm"; then
+				fail "fw-switch-locked: rebind writes nothing"
+			else
+				ok "fw-switch-locked: rebind writes nothing"
+			fi
+			if [ "$(g 'cat /sys/bus/cxl/devices/region*/locked 2>/dev/null | sort -u')" = 1 ]; then
+				ok "fw-switch-locked: region still locked after the rebind"
+			else
+				fail "fw-switch-locked: region still locked after the rebind"
 			fi
 			if grep -qE "$SPLAT_RE" <<<"$dm"; then
 				fail "fw-switch-locked: no splat across teardown"
