@@ -1,0 +1,6 @@
+{"title":"t6 - switch USP, BI RT optional","windows":["fmw.0: BI, 4G, ig 4k -> cxl.1"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Forward  nr_bi=1"},
+{"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"BI RT; USP_EXTRA knob"},
+{"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Enable  nr_bi=1"},
+{"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"hdm-db"}]}

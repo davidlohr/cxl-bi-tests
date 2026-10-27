@@ -1,0 +1,9 @@
+{
+  "title": "t16 (scenarios 1-5) - one passthrough RP, x-committed endpoint",
+  "windows": ["fmw.0: 4G, ig 4k -> cxl.1 (BI on in 1,2,5; plain in 3,4)"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Enable nr_bi=1 (hdm-db)"},
+    {"id":"vmem0","kind":"ep","label":"cxl-type3 vmem0","parent":"rp0","note":"x-committed=hdm-db|hdm-h"}
+  ]
+}

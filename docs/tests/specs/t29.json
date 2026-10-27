@@ -1,0 +1,14 @@
+{"title":"t29 - mixed Type 2 / Type 3 under two switches","windows":["fmw.0: BI, 4G, ig 4k -> cxl.1"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0 (port 0)","parent":"hb","note":"Forward"},
+{"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"BI RT"},
+{"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Enable"},
+{"id":"dsp1","kind":"dsp","label":"cxl-downstream dsp1","parent":"us0","note":"Enable"},
+{"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"hdm-db, host+dev"},
+{"id":"acc1","kind":"accel","label":"cxl-accel acc1","parent":"dsp1","note":"hdm-db, dev-only (Type 2)"},
+{"id":"rp1","kind":"rp","label":"cxl-rp rp1 (port 1)","parent":"hb","note":"Forward"},
+{"id":"us1","kind":"usp","label":"cxl-upstream us1","parent":"rp1","note":"BI RT"},
+{"id":"dsp2","kind":"dsp","label":"cxl-downstream dsp2","parent":"us1","note":"Enable"},
+{"id":"dsp3","kind":"dsp","label":"cxl-downstream dsp3","parent":"us1","note":"Enable"},
+{"id":"acc2","kind":"accel","label":"cxl-accel acc2","parent":"dsp2","note":"hdm-db, dev-only (Type 2)"},
+{"id":"mem3","kind":"ep","label":"cxl-type3 mem3","parent":"dsp3","note":"hdm-db, host+dev"}]}

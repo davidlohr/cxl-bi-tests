@@ -1,0 +1,9 @@
+{
+  "title": "t28 - direct attach, AER fatal injected into the endpoint",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Enable  nr_bi=1->0->1"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"rp0","note":"hdm-db, MALF_TLP target"}
+  ]
+}

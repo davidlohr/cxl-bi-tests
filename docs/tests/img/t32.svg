@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<text x="12" y="20" font-weight="bold">t32 - two switches under two host bridges, 4-way</text>
+<text x="12" y="38">fmw.0: BI, 4G, ig 4k -&gt; cxl.1, cxl.2 (iw=2)</text>
+<path d="M222,106 C222,123 222,123 222,140" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,186 C222,203 222,203 222,220" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,266 C222,283 116,283 116,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,266 C222,283 328,283 328,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M116,346 C116,363 116,363 116,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,346 C328,363 328,363 328,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M662,106 C662,123 662,123 662,140" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M662,186 C662,203 662,203 662,220" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M662,266 C662,283 556,283 556,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M662,266 C662,283 768,283 768,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M556,346 C556,363 556,363 556,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M768,346 C768,363 768,363 768,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<rect x="124" y="60" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="222" y="79" text-anchor="middle" font-weight="bold">pxb-cxl cxl.1</text>
+<text x="222" y="96" text-anchor="middle" font-size="11" fill="#333">window target 0</text>
+<rect x="124" y="140" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="222" y="159" text-anchor="middle" font-weight="bold">cxl-rp rp0</text>
+<text x="222" y="176" text-anchor="middle" font-size="11" fill="#333">Forward  nr_bi=2</text>
+<rect x="124" y="220" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="222" y="239" text-anchor="middle" font-weight="bold">cxl-upstream us0</text>
+<text x="222" y="256" text-anchor="middle" font-size="11" fill="#333">iw=2, ig=8192</text>
+<rect x="18" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="116" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp0</text>
+<text x="116" y="336" text-anchor="middle" font-size="11" fill="#333">Enable  nr_bi=1</text>
+<rect x="230" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="328" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp1</text>
+<text x="328" y="336" text-anchor="middle" font-size="11" fill="#333">Enable  nr_bi=1</text>
+<rect x="18" y="380" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="116" y="399" text-anchor="middle" font-weight="bold">cxl-type3 mem0</text>
+<text x="116" y="416" text-anchor="middle" font-size="11" fill="#333">hdm-db, 512M, pos 0</text>
+<rect x="230" y="380" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="328" y="399" text-anchor="middle" font-weight="bold">cxl-type3 mem1</text>
+<text x="328" y="416" text-anchor="middle" font-size="11" fill="#333">hdm-db, 512M, pos 2</text>
+<rect x="564" y="60" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="662" y="79" text-anchor="middle" font-weight="bold">pxb-cxl cxl.2</text>
+<text x="662" y="96" text-anchor="middle" font-size="11" fill="#333">window target 1</text>
+<rect x="564" y="140" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="662" y="159" text-anchor="middle" font-weight="bold">cxl-rp rp1</text>
+<text x="662" y="176" text-anchor="middle" font-size="11" fill="#333">Forward  nr_bi=2</text>
+<rect x="564" y="220" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="662" y="239" text-anchor="middle" font-weight="bold">cxl-upstream us1</text>
+<text x="662" y="256" text-anchor="middle" font-size="11" fill="#333">iw=2, ig=8192</text>
+<rect x="458" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="556" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp2</text>
+<text x="556" y="336" text-anchor="middle" font-size="11" fill="#333">Enable  nr_bi=1</text>
+<rect x="670" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="768" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp3</text>
+<text x="768" y="336" text-anchor="middle" font-size="11" fill="#333">Enable  nr_bi=1</text>
+<rect x="458" y="380" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="556" y="399" text-anchor="middle" font-weight="bold">cxl-type3 mem2</text>
+<text x="556" y="416" text-anchor="middle" font-size="11" fill="#333">hdm-db, 512M, pos 1</text>
+<rect x="670" y="380" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="768" y="399" text-anchor="middle" font-weight="bold">cxl-type3 mem3</text>
+<text x="768" y="416" text-anchor="middle" font-size="11" fill="#333">hdm-db, 512M, pos 3</text>
+</svg>

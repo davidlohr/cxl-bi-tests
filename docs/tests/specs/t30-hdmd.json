@@ -1,0 +1,4 @@
+{"title":"t30/hdmd - staged HDM-D accel, device-coherent window","windows":["fmw.0: host-only=off, 4G, ig 4k -> cxl.1"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"no BI role  nr_bi=0"},
+{"id":"mem0","kind":"accel","label":"cxl-accel mem0","parent":"rp0","note":"x-committed=hdm-d"}]}

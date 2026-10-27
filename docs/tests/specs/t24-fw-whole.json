@@ -1,0 +1,9 @@
+{
+  "title": "t24 fw-whole - RP Enable staged from the guest",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Enable staged via /dev/mem"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"rp0","note":"x-committed=hdm-db"}
+  ]
+}

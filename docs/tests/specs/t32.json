@@ -1,0 +1,15 @@
+{"title":"t32 - two switches under two host bridges, 4-way","windows":["fmw.0: BI, 4G, ig 4k -> cxl.1, cxl.2 (iw=2)"],"nodes":[
+{"id":"hb1","kind":"hb","label":"pxb-cxl cxl.1","note":"window target 0"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb1","note":"Forward  nr_bi=2"},
+{"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"iw=2, ig=8192"},
+{"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Enable  nr_bi=1"},
+{"id":"dsp1","kind":"dsp","label":"cxl-downstream dsp1","parent":"us0","note":"Enable  nr_bi=1"},
+{"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"hdm-db, 512M, pos 0"},
+{"id":"mem1","kind":"ep","label":"cxl-type3 mem1","parent":"dsp1","note":"hdm-db, 512M, pos 2"},
+{"id":"hb2","kind":"hb","label":"pxb-cxl cxl.2","note":"window target 1"},
+{"id":"rp1","kind":"rp","label":"cxl-rp rp1","parent":"hb2","note":"Forward  nr_bi=2"},
+{"id":"us1","kind":"usp","label":"cxl-upstream us1","parent":"rp1","note":"iw=2, ig=8192"},
+{"id":"dsp2","kind":"dsp","label":"cxl-downstream dsp2","parent":"us1","note":"Enable  nr_bi=1"},
+{"id":"dsp3","kind":"dsp","label":"cxl-downstream dsp3","parent":"us1","note":"Enable  nr_bi=1"},
+{"id":"mem2","kind":"ep","label":"cxl-type3 mem2","parent":"dsp2","note":"hdm-db, 512M, pos 1"},
+{"id":"mem3","kind":"ep","label":"cxl-type3 mem3","parent":"dsp3","note":"hdm-db, 512M, pos 3"}]}

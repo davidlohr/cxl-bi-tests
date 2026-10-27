@@ -43,7 +43,10 @@ reporting themselves as skipped.
 Thirty-four topology scripts under `topos/`, each varying one axis so the
 gate under test is isolated.
 
-Per-suite QEMU topology diagrams live in [docs/topologies.md](docs/topologies.md).
+Per-suite QEMU topology diagrams live in [docs/topologies.md](docs/topologies.md),
+and every suite has its own page under [docs/tests/](docs/tests/README.md)
+with its topology diagram, the semantics under test and every TAP line it
+can emit.
 The rules behind all of it, each quoted from the specification and
 mapped to what the driver does and which suite proves it, are in
 [docs/first-principles.md](docs/first-principles.md). What the driver

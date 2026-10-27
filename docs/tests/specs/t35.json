@@ -1,0 +1,6 @@
+{"title":"t35 - switch USP not in 256B Flit, BI + HDM-H CFMWS","windows":["fmw.0: BI, 4G, ig 4k -> cxl.1","fmw.1: HDM-H, 4G, ig 4k -> cxl.1"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"256B flit"},
+{"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"x-256b-flit=off"},
+{"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"256B flit"},
+{"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"hdm-db, stays bi=0"}]}

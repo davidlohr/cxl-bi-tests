@@ -1,0 +1,13 @@
+{
+  "title": "t25/rollback - commit fault at the outer (transit) DSP",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"never reached, nr_bi=0"},
+    {"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"BI RT"},
+    {"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"x-bi-commit-fault=error"},
+    {"id":"us1","kind":"usp","label":"cxl-upstream us1","parent":"dsp0","note":"BI RT"},
+    {"id":"dsp1","kind":"dsp","label":"cxl-downstream dsp1","parent":"us1","note":"Enable 0->1->0 (unwound)"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp1","note":"hdm-db, bi=0"}
+  ]
+}

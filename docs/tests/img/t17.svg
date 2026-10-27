@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="672" height="470" viewBox="0 0 672 470" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<text x="12" y="20" font-weight="bold">t17 - QMP hotplug (boot shape)</text>
+<text x="12" y="38">fmw.0: BI, 4G, ig 4k -&gt; cxl.1</text>
+<path d="M328,106 C328,123 328,123 328,140" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,186 C328,203 328,203 328,220" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,266 C328,283 116,283 116,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,266 C328,283 328,283 328,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,266 C328,283 540,283 540,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M116,346 C116,363 116,363 116,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<rect x="230" y="60" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="328" y="79" text-anchor="middle" font-weight="bold">pxb-cxl cxl.1</text>
+<rect x="230" y="140" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="328" y="159" text-anchor="middle" font-weight="bold">cxl-rp rp0</text>
+<text x="328" y="176" text-anchor="middle" font-size="11" fill="#333">Forward  nr_bi=1 at boot</text>
+<rect x="230" y="220" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="328" y="239" text-anchor="middle" font-weight="bold">cxl-upstream us0</text>
+<text x="328" y="256" text-anchor="middle" font-size="11" fill="#333">BI RT</text>
+<rect x="18" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="116" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp0</text>
+<text x="116" y="336" text-anchor="middle" font-size="11" fill="#333">Enable  nr_bi=1</text>
+<rect x="230" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="328" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp1</text>
+<text x="328" y="336" text-anchor="middle" font-size="11" fill="#333">empty: hot-add sn=0x172</text>
+<rect x="442" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="540" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp2</text>
+<text x="540" y="336" text-anchor="middle" font-size="11" fill="#333">empty: re-add sn=0x173</text>
+<rect x="18" y="380" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="116" y="399" text-anchor="middle" font-weight="bold">cxl-type3 ep0</text>
+<text x="116" y="416" text-anchor="middle" font-size="11" fill="#333">hdm-db, sn=0x171, 1G</text>
+</svg>

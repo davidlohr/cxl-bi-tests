@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="310" viewBox="0 0 440 310" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<text x="12" y="20" font-weight="bold">t24 fw-whole - RP Enable staged from the guest</text>
+<text x="12" y="38">fmw.0: BI, 4G, ig 4k -&gt; cxl.1</text>
+<path d="M116,106 C116,123 116,123 116,140" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M116,186 C116,203 116,203 116,220" stroke="#777" fill="none" stroke-width="1.4"/>
+<rect x="18" y="60" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="116" y="79" text-anchor="middle" font-weight="bold">pxb-cxl cxl.1</text>
+<rect x="18" y="140" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="116" y="159" text-anchor="middle" font-weight="bold">cxl-rp rp0</text>
+<text x="116" y="176" text-anchor="middle" font-size="11" fill="#333">Enable staged via /dev/mem</text>
+<rect x="18" y="220" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="116" y="239" text-anchor="middle" font-weight="bold">cxl-type3 mem0</text>
+<text x="116" y="256" text-anchor="middle" font-size="11" fill="#333">x-committed=hdm-db</text>
+</svg>

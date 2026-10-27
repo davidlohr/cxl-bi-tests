@@ -1,0 +1,13 @@
+{
+  "title": "t24 fw-switch-locked - locked path behind a switch, with a sibling",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1 (hdm_for_passthrough=on)"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1","note":"HB dec0 staged by hand"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Forward staged, shared"},
+    {"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"rt-committed, dec0 by hand"},
+    {"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Enable x-bi-committed=on"},
+    {"id":"dsp1","kind":"dsp","label":"cxl-downstream dsp1","parent":"us0","note":"no staging"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"x-bi-enabled, dec0 locked"},
+    {"id":"mem1","kind":"ep","label":"cxl-type3 mem1","parent":"dsp1","note":"hdm-db, driver-enabled"}
+  ]
+}

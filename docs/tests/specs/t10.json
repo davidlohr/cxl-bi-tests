@@ -1,0 +1,6 @@
+{"title":"t10 - two BI endpoints under different RPs","windows":["fmw.0: BI, 4G, ig 4k -> cxl.1"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+{"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Enable  nr_bi=1"},
+{"id":"rp1","kind":"rp","label":"cxl-rp rp1","parent":"hb","note":"Enable  nr_bi=1"},
+{"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"rp0","note":"hdm-db"},
+{"id":"mem1","kind":"ep","label":"cxl-type3 mem1","parent":"rp1","note":"hdm-db"}]}

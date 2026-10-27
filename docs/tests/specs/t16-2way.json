@@ -1,0 +1,12 @@
+{
+  "title": "t16 (scenarios 7-8) - committed 2-way set across two passthrough HBs",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1, cxl.2"],
+  "nodes": [
+    {"id":"hb1","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp1","kind":"rp","label":"cxl-rp rp1","parent":"hb1","note":"Enable nr_bi=1"},
+    {"id":"vmem0","kind":"ep","label":"cxl-type3 vmem0","parent":"rp1","note":"hdm-db ways=2"},
+    {"id":"hb2","kind":"hb","label":"pxb-cxl cxl.2"},
+    {"id":"rp2","kind":"rp","label":"cxl-rp rp2","parent":"hb2","note":"Enable (7) / nr_bi=0 (8)"},
+    {"id":"vmem1","kind":"ep","label":"cxl-type3 vmem1","parent":"rp2","note":"hdm-db (7) | hdm-h (8)"}
+  ]
+}

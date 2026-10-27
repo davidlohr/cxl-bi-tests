@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="460" height="630" viewBox="0 0 460 630" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<text x="12" y="20" font-weight="bold">t24 fw-shared-dsp - two firmware-enabled endpoints sharing a transit DSP</text>
+<text x="12" y="38">fmw.0: BI, 4G, ig 4k -&gt; cxl.1</text>
+<path d="M222,106 C222,123 222,123 222,140" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,186 C222,203 222,203 222,220" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,266 C222,283 222,283 222,300" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,346 C222,363 222,363 222,380" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,426 C222,443 116,443 116,460" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M222,426 C222,443 328,443 328,460" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M116,506 C116,523 116,523 116,540" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M328,506 C328,523 328,523 328,540" stroke="#777" fill="none" stroke-width="1.4"/>
+<rect x="124" y="60" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="222" y="79" text-anchor="middle" font-weight="bold">pxb-cxl cxl.1</text>
+<rect x="124" y="140" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="222" y="159" text-anchor="middle" font-weight="bold">cxl-rp rp0</text>
+<text x="222" y="176" text-anchor="middle" font-size="11" fill="#333">Forward</text>
+<rect x="124" y="220" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="222" y="239" text-anchor="middle" font-weight="bold">cxl-upstream us0</text>
+<text x="222" y="256" text-anchor="middle" font-size="11" fill="#333">outer RT, rt-committed</text>
+<rect x="124" y="300" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="222" y="319" text-anchor="middle" font-weight="bold">cxl-downstream dsp0</text>
+<text x="222" y="336" text-anchor="middle" font-size="11" fill="#333">Forward, shared transit</text>
+<rect x="124" y="380" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="222" y="399" text-anchor="middle" font-weight="bold">cxl-upstream us1</text>
+<text x="222" y="416" text-anchor="middle" font-size="11" fill="#333">inner RT, rt-committed</text>
+<rect x="18" y="460" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="116" y="479" text-anchor="middle" font-weight="bold">cxl-downstream dsp1</text>
+<text x="116" y="496" text-anchor="middle" font-size="11" fill="#333">Enable x-bi-committed=on</text>
+<rect x="230" y="460" width="196" height="46" rx="7" fill="#f3e8d8" stroke="#a5692b" stroke-width="1.5"/>
+<text x="328" y="479" text-anchor="middle" font-weight="bold">cxl-downstream dsp2</text>
+<text x="328" y="496" text-anchor="middle" font-size="11" fill="#333">Enable x-bi-committed=on</text>
+<rect x="18" y="540" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="116" y="559" text-anchor="middle" font-weight="bold">cxl-type3 mem0</text>
+<text x="116" y="576" text-anchor="middle" font-size="11" fill="#333">hdm-db, x-bi-enabled=on</text>
+<rect x="230" y="540" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="328" y="559" text-anchor="middle" font-weight="bold">cxl-type3 mem1</text>
+<text x="328" y="576" text-anchor="middle" font-size="11" fill="#333">hdm-db, x-bi-enabled=on</text>
+</svg>

@@ -1,0 +1,2 @@
+{"title":"t13 - host-only + back-invalidate window (negative launch)","windows":["fmw.0: host-only=on + BI, 4G -> cxl.1 (QEMU must refuse)"],"nodes":[
+{"id":"hb","kind":"hb","label":"pxb-cxl cxl.1","note":"no RP, no endpoint"}]}

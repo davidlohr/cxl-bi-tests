@@ -1,0 +1,17 @@
+{
+  "title": "t25/shared-rollback - two endpoints under the innermost of three levels, outer transit faults its 2nd commit",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Forward (survivor)"},
+    {"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"BI RT"},
+    {"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Forward, fault-after=1"},
+    {"id":"us1","kind":"usp","label":"cxl-upstream us1","parent":"dsp0","note":"BI RT"},
+    {"id":"dsp1","kind":"dsp","label":"cxl-downstream dsp1","parent":"us1","note":"Forward (shared transit)"},
+    {"id":"us2","kind":"usp","label":"cxl-upstream us2","parent":"dsp1","note":"BI RT"},
+    {"id":"dsp2","kind":"dsp","label":"cxl-downstream dsp2","parent":"us2","note":"Enable / cleared"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp2","note":"hdm-db"},
+    {"id":"dsp3","kind":"dsp","label":"cxl-downstream dsp3","parent":"us2","note":"Enable / cleared"},
+    {"id":"mem1","kind":"ep","label":"cxl-type3 mem1","parent":"dsp3","note":"hdm-db"}
+  ]
+}

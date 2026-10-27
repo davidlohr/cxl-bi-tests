@@ -1,0 +1,11 @@
+{
+  "title": "t27 switch - reset target below a switch",
+  "windows": ["fmw.0: BI, 4G, ig 4k -> cxl.1"],
+  "nodes": [
+    {"id":"hb","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp0","kind":"rp","label":"cxl-rp rp0","parent":"hb","note":"Forward, above the reset"},
+    {"id":"us0","kind":"usp","label":"cxl-upstream us0","parent":"rp0","note":"BI RT"},
+    {"id":"dsp0","kind":"dsp","label":"cxl-downstream dsp0","parent":"us0","note":"Enable, above the reset"},
+    {"id":"mem0","kind":"ep","label":"cxl-type3 mem0","parent":"dsp0","note":"hdm-db, reset target"}
+  ]
+}

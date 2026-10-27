@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="704" height="346" viewBox="0 0 704 346" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+<rect width="100%" height="100%" fill="white"/>
+<text x="12" y="20" font-weight="bold">t16 (scenario 6) - three HBs, one x-committed flavor each</text>
+<text x="12" y="38">fmw.0: BI, 4G, ig 4k -&gt; cxl.1</text>
+<text x="12" y="56">fmw.1: 4G, ig 4k -&gt; cxl.2</text>
+<text x="12" y="74">fmw.2: 4G, ig 4k -&gt; cxl.3</text>
+<path d="M116,142 C116,159 116,159 116,176" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M116,222 C116,239 116,239 116,256" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M344,142 C344,159 344,159 344,176" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M344,222 C344,239 344,239 344,256" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M572,142 C572,159 572,159 572,176" stroke="#777" fill="none" stroke-width="1.4"/>
+<path d="M572,222 C572,239 572,239 572,256" stroke="#777" fill="none" stroke-width="1.4"/>
+<rect x="18" y="96" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="116" y="115" text-anchor="middle" font-weight="bold">pxb-cxl cxl.1</text>
+<rect x="18" y="176" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="116" y="195" text-anchor="middle" font-weight="bold">cxl-rp rp1</text>
+<text x="116" y="212" text-anchor="middle" font-size="11" fill="#333">Enable nr_bi=1</text>
+<rect x="18" y="256" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="116" y="275" text-anchor="middle" font-weight="bold">cxl-type3 vmem0</text>
+<text x="116" y="292" text-anchor="middle" font-size="11" fill="#333">hdm-db x-committed=hdm-db</text>
+<rect x="246" y="96" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="344" y="115" text-anchor="middle" font-weight="bold">pxb-cxl cxl.2</text>
+<rect x="246" y="176" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="344" y="195" text-anchor="middle" font-weight="bold">cxl-rp rp2</text>
+<text x="344" y="212" text-anchor="middle" font-size="11" fill="#333">nr_bi=0</text>
+<rect x="246" y="256" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="344" y="275" text-anchor="middle" font-weight="bold">cxl-type3 vmem1</text>
+<text x="344" y="292" text-anchor="middle" font-size="11" fill="#333">x-committed=hdm-h</text>
+<rect x="474" y="96" width="196" height="46" rx="7" fill="#e8eef7" stroke="#4a6fa5" stroke-width="1.5"/>
+<text x="572" y="115" text-anchor="middle" font-weight="bold">pxb-cxl cxl.3</text>
+<rect x="474" y="176" width="196" height="46" rx="7" fill="#dcebdc" stroke="#3d7a3d" stroke-width="1.5"/>
+<text x="572" y="195" text-anchor="middle" font-weight="bold">cxl-rp rp3</text>
+<text x="572" y="212" text-anchor="middle" font-size="11" fill="#333">Enable nr_bi=1</text>
+<rect x="474" y="256" width="196" height="46" rx="7" fill="#f7e3e3" stroke="#a53d3d" stroke-width="1.5"/>
+<text x="572" y="275" text-anchor="middle" font-weight="bold">cxl-type3 vmem2</text>
+<text x="572" y="292" text-anchor="middle" font-size="11" fill="#333">hdm-db, rejected (no BI)</text>
+</svg>

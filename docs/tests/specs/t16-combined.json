@@ -1,0 +1,19 @@
+{
+  "title": "t16 (scenario 6) - three HBs, one x-committed flavor each",
+  "windows": [
+    "fmw.0: BI, 4G, ig 4k -> cxl.1",
+    "fmw.1: 4G, ig 4k -> cxl.2",
+    "fmw.2: 4G, ig 4k -> cxl.3"
+  ],
+  "nodes": [
+    {"id":"hb1","kind":"hb","label":"pxb-cxl cxl.1"},
+    {"id":"rp1","kind":"rp","label":"cxl-rp rp1","parent":"hb1","note":"Enable nr_bi=1"},
+    {"id":"vmem0","kind":"ep","label":"cxl-type3 vmem0","parent":"rp1","note":"hdm-db x-committed=hdm-db"},
+    {"id":"hb2","kind":"hb","label":"pxb-cxl cxl.2"},
+    {"id":"rp2","kind":"rp","label":"cxl-rp rp2","parent":"hb2","note":"nr_bi=0"},
+    {"id":"vmem1","kind":"ep","label":"cxl-type3 vmem1","parent":"rp2","note":"x-committed=hdm-h"},
+    {"id":"hb3","kind":"hb","label":"pxb-cxl cxl.3"},
+    {"id":"rp3","kind":"rp","label":"cxl-rp rp3","parent":"hb3","note":"Enable nr_bi=1"},
+    {"id":"vmem2","kind":"ep","label":"cxl-type3 vmem2","parent":"rp3","note":"hdm-db, rejected (no BI)"}
+  ]
+}
