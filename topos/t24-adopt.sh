@@ -21,7 +21,9 @@
 #   2. fresh-dev: DSP (x-bi-committed) and USP RT (x-bi-rt-committed)
 #      staged committed but the endpoint is NOT firmware-enabled.
 #      Adoption must be declined: both commits run even though the
-#      register values do not change.
+#      register values do not change. Teardown then leaves the DSP as
+#      it was found: only a level the driver brought up from zero is
+#      ever cleared, so no dealloc commit either.
 #   3. wrong-role: a cascade's TRANSIT DSP staged Enable+committed.
 #      The kernel must reprogram it to Forward and commit, and give
 #      the adjacent DSP the Enable.
@@ -30,7 +32,8 @@
 #      it from the guest instead: unbind, set BI Enable on the endpoint
 #      AND the RP behind the driver, bind. The driver writes nothing,
 #      but the mapping is not locked: unbind resets the decoder, so
-#      nothing is live and the path is deallocated device-first.
+#      nothing is live and the device is deallocated; the RP, found
+#      up, is kept as found.
 #   9. fw-locked: scenario 8 plus Lock On Commit on the committed
 #      endpoint decoder. The mapping outlives the driver, so BI must
 #      too: the device keeps BI Enable, each level of the path is
@@ -302,11 +305,12 @@ else
 	else
 		fail "fresh-dev: endpoint disabled on unbind"
 	fi
+	# found up at first use: the level is left as found at zero
 	n2=$(grep -c 'BI-ID commit wait took' <<<"$dm")
-	if [ "$n2" -gt "$n1" ]; then
-		ok "fresh-dev: dealloc commit ran ($n1 -> $n2)"
+	if [ "$n2" -eq "$n1" ]; then
+		ok "fresh-dev: no dealloc commit on a level found up ($n1 -> $n2)"
 	else
-		fail "fresh-dev: dealloc commit ran ($n1 -> $n2)"
+		fail "fresh-dev: no dealloc commit on a level found up ($n1 -> $n2)"
 	fi
 	if grep -qE "$SPLAT_RE" <<<"$dm"; then
 		fail "fresh-dev: no splat across teardown"
@@ -315,11 +319,11 @@ else
 	fi
 	read -r _ dctrl2 _ <<<"$(bi_regs "$dsp" 0xC)"
 	if [ -z "$dctrl2" ]; then
-		skip "fresh-dev: DSP cleared post-teardown (no /dev/mem)"
-	elif [ $(( dctrl2 & 0x3 )) = 0 ]; then
-		ok "fresh-dev: DSP cleared post-teardown"
+		skip "fresh-dev: DSP kept Enable post-teardown (no /dev/mem)"
+	elif [ $(( dctrl2 & 0x3 )) = 2 ]; then
+		ok "fresh-dev: DSP kept Enable post-teardown (found up)"
 	else
-		fail "fresh-dev: DSP cleared post-teardown ($dctrl2)"
+		fail "fresh-dev: DSP kept Enable post-teardown ($dctrl2)"
 	fi
 	oracle_silent "fresh-dev"
 	g dmesg > "$OUT/t24-fresh-dev.dmesg" 2>/dev/null
@@ -770,16 +774,18 @@ else
 		read -r _ ectl _ <<<"$(bi_regs "$ep" 0xC)"
 		read -r _ rctl _ <<<"$(bi_regs "$rp" 0xC)"
 		# Not locked: the region reset took the decoder down, so
-		# nothing is live and the path is deallocated device-first.
+		# nothing is live and the device is deallocated. The RP was
+		# found up when the rebind walked it, so it is kept as found:
+		# only a level the driver brought up from zero is cleared.
 		if [ $(( ectl & 0x2 )) = 0 ]; then
 			ok "fw-whole: endpoint Enable cleared on unbind (unlocked)"
 		else
 			fail "fw-whole: endpoint Enable cleared on unbind ($ectl)"
 		fi
-		if [ $(( rctl & 0x2 )) = 0 ]; then
-			ok "fw-whole: RP Enable cleared on unbind (unlocked)"
+		if [ $(( rctl & 0x2 )) = 2 ]; then
+			ok "fw-whole: RP kept Enable on unbind (found up)"
 		else
-			fail "fw-whole: RP Enable cleared on unbind ($rctl)"
+			fail "fw-whole: RP kept Enable on unbind ($rctl)"
 		fi
 		if grep -q "BI requests disabled" <<<"$dm"; then
 			ok "fw-whole: endpoint disabled on unbind"
