@@ -453,8 +453,53 @@ if ! "$QEMU" -device help 2>/dev/null | grep -q '"cxl-accel"' ||
 	for i in $(seq 1 4); do
 		skip "qemu lacks cxl-accel with x-coherency-unknown"
 	done
-	exit $((FAIL != 0))
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,share=on,size=256M \
+	  -object memory-backend-ram,id=m1,share=on,size=256M \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device pxb-cxl,bus_nr=64,bus=pcie.0,id=cxl.2 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp1,chassis=0,slot=2 \
+	  -device cxl-rp,port=0,bus=cxl.2,id=rp2,chassis=1,slot=2 \
+	  -device cxl-accel,bus=rp1,volatile-memdev=m0,id=accel0,x-coherency-unknown=on,x-committed=hdm-d,x-committed-ways=2 \
+	  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,x-256b-flit=on,hdm-db=on,x-committed=hdm-h,x-committed-ways=2 \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.targets.1=cxl.2,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k
+	if ! wait_for_guest 180; then
+		fail "mixed-trt: guest booted"; exit 1
+	fi
+	ok "mixed-trt: guest booted (HDM-D accel + HDM-H type3 2-way set)"
+	ncommitted=$(g 'c=0; for r in /sys/bus/cxl/devices/region*/commit; do
+		[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && c=$((c+1)); done; echo $c')
+	if [ "$ncommitted" = 0 ]; then
+		ok "mixed-trt: no committed region across the set"
+	else
+		fail "mixed-trt: no committed region across the set (got $ncommitted)"
+	fi
+	nmem=$(g 'ls -d /sys/bus/cxl/devices/mem* 2>/dev/null | wc -l')
+	if [ "$nmem" = 2 ]; then
+		ok "mixed-trt: both endpoints survive"
+	else
+		fail "mixed-trt: both endpoints survive (got $nmem)"
+	fi
+	if assembly_gap; then
+		skip "mixed-trt: range-type mismatch refused (kernel lacks passthrough assembly)"
+	elif [ "$(g dmesg | grep -c 'coherency model mismatch')" -gt 0 ]; then
+		ok "mixed-trt: range-type mismatch refused"
+	else
+		fail "mixed-trt: range-type mismatch refused"
+	fi
+	g dmesg > "$OUT/t16-mixed-trt.dmesg" 2>/dev/null
 fi
+
+# --- scenario 10: committed member whose peer never commits -----------
+# The first member of a committed 2-way HDM-DB set commits, its peer is
+# the same hdm-db device left uncommitted, so the auto region waits for
+# a target that never arrives and is never committed. Deleting it
+# resets nothing - the member is still committed in hardware - so its
+# decoder must keep the type it decodes (accelerator, HDM-DB), and an
+# HDM-H region from a second, plain window must refuse it rather than
+# take it in, since cxl_decoder_commit() would return early on the
+# already committed decoder without reprogramming it.
 launch_qemu \
   -object memory-backend-ram,id=m0,share=on,size=256M \
   -object memory-backend-ram,id=m1,share=on,size=256M \
@@ -462,33 +507,63 @@ launch_qemu \
   -device pxb-cxl,bus_nr=64,bus=pcie.0,id=cxl.2 \
   -device cxl-rp,port=0,bus=cxl.1,id=rp1,chassis=0,slot=2 \
   -device cxl-rp,port=0,bus=cxl.2,id=rp2,chassis=1,slot=2 \
-  -device cxl-accel,bus=rp1,volatile-memdev=m0,id=accel0,x-coherency-unknown=on,x-committed=hdm-d,x-committed-ways=2 \
-  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,x-256b-flit=on,hdm-db=on,x-committed=hdm-h,x-committed-ways=2 \
-  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.targets.1=cxl.2,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k
+  -device cxl-type3,bus=rp1,volatile-memdev=m0,id=vmem0,sn=0x1,x-256b-flit=on,hdm-db=on,x-committed=hdm-db,x-committed-ways=2 \
+  -device cxl-type3,bus=rp2,volatile-memdev=m1,id=vmem1,sn=0x2,x-256b-flit=on,hdm-db=on \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.targets.1=cxl.2,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on,cxl-fmw.1.targets.0=cxl.1,cxl-fmw.1.size=4G,cxl-fmw.1.interleave-granularity=4k
 if ! wait_for_guest 180; then
-	fail "mixed-trt: guest booted"; exit 1
+	fail "orphan: guest booted"; exit 1
 fi
-ok "mixed-trt: guest booted (HDM-D accel + HDM-H type3 2-way set)"
-ncommitted=$(g 'c=0; for r in /sys/bus/cxl/devices/region*/commit; do
-	[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && c=$((c+1)); done; echo $c')
-if [ "$ncommitted" = 0 ]; then
-	ok "mixed-trt: no committed region across the set"
+ok "orphan: guest booted (committed 2-way member, peer uncommitted)"
+if [ "$(g dmesg | grep -c 'adopting firmware-enabled BI')" = 1 ]; then
+	ok "orphan: committed member adopted"
 else
-	fail "mixed-trt: no committed region across the set (got $ncommitted)"
+	fail "orphan: committed member adopted"
 fi
-nmem=$(g 'ls -d /sys/bus/cxl/devices/mem* 2>/dev/null | wc -l')
-if [ "$nmem" = 2 ]; then
-	ok "mixed-trt: both endpoints survive"
-else
-	fail "mixed-trt: both endpoints survive (got $nmem)"
-fi
+DA=$(dec_of_sn 0x1)
 if assembly_gap; then
-	skip "mixed-trt: range-type mismatch refused (kernel lacks passthrough assembly)"
-elif [ "$(g dmesg | grep -c 'coherency model mismatch')" -gt 0 ]; then
-	ok "mixed-trt: range-type mismatch refused"
+	skip "orphan: auto region waits uncommitted (kernel lacks passthrough assembly)"
+	skip "orphan: committed decoder keeps its type (kernel lacks passthrough assembly)"
+	skip "orphan: HDM-H region refuses it (kernel lacks passthrough assembly)"
+	skip "orphan: no committed region (kernel lacks passthrough assembly)"
 else
-	fail "mixed-trt: range-type mismatch refused"
+	if [ "$(g cat /sys/bus/cxl/devices/region0/commit 2>/dev/null)" = 0 ] &&
+	   [ "$(g cat /sys/bus/cxl/devices/region0/interleave_ways 2>/dev/null)" = 2 ]; then
+		ok "orphan: auto region waits uncommitted for the missing peer"
+	else
+		fail "orphan: auto region waits uncommitted for the missing peer"
+	fi
+	g 'rd=$(basename $(readlink -f /sys/bus/cxl/devices/region0/..))
+	   echo region0 > /sys/bus/cxl/devices/$rd/delete_region'
+	tt=$(g cat /sys/bus/cxl/devices/$DA/target_type)
+	if [ "$tt" = accelerator ]; then
+		ok "orphan: committed decoder keeps its type after delete (accelerator)"
+	else
+		fail "orphan: committed decoder keeps its type after delete (got '$tt')"
+	fi
+	# an HDM-H region from the plain window, sized for the decoder's DPA
+	att=$(g 'C=/sys/bus/cxl/devices
+		for r in $C/decoder0.*; do
+			[ "$(cat $r/cap_back_invalidate)" = 0 ] && rd=$(basename $r)
+		done
+		reg=$(cat $C/$rd/create_ram_region)
+		echo $reg > $C/$rd/create_ram_region
+		echo 4096 > $C/$reg/interleave_granularity
+		echo 1 > $C/$reg/interleave_ways
+		cat $C/'"$DA"'/dpa_size > $C/$reg/size
+		echo '"$DA"' > $C/$reg/target0 2>/dev/null && echo attached || echo refused')
+	if [ "$att" = refused ] && dmesg_has "coherency model mismatch"; then
+		ok "orphan: HDM-H region refuses the committed HDM-DB decoder"
+	else
+		fail "orphan: HDM-H region refuses the committed HDM-DB decoder ($att)"
+	fi
+	ncommitted=$(g 'c=0; for r in /sys/bus/cxl/devices/region*/commit; do
+		[ -e "$r" ] && [ "$(cat "$r")" = 1 ] && c=$((c+1)); done; echo $c')
+	if [ "$ncommitted" = 0 ]; then
+		ok "orphan: no committed region"
+	else
+		fail "orphan: no committed region (got $ncommitted)"
+	fi
 fi
-g dmesg > "$OUT/t16-mixed-trt.dmesg" 2>/dev/null
+g dmesg > "$OUT/t16-orphan.dmesg" 2>/dev/null
 
 exit $((FAIL != 0))
