@@ -45,11 +45,11 @@ Three rules decide everything below.
    (`nr_bi == 0`) is *held*: the driver never clears it, for the dport's
    lifetime. It does not matter who set it, firmware or a previous
    binding of this driver; the register is not this binding's to take
-   down. A level is also held once a device below it is released while
+   down. A level is also held once a device below it is torn down while
    still decoding with BI (rule 2). (Code: `bi_held`, set in
    `cxl_bi_ctrl_dport_enable()` when `nr_bi == 0` and the register is
    up, and in `cxl_bi_ctrl_dport_disable()` when the device below is
-   live; never cleared.)
+   live at teardown; never cleared.)
 
 2. **The device keeps BI Enable while one of its HDM decoders still
    decodes with BI.** At release the driver reads the device's HDM
@@ -60,10 +60,11 @@ Three rules decide everything below.
    Enable is the device-wide permission that lets the device snoop it
    (Table 8-157); clearing it would leave a decoding HDM-DB range unable
    to issue BISnp, and a level with neither Enable nor Forward would
-   discard one anyway (Table 9-13). So the device keeps its Enable and
-   every level on its path is held. Otherwise the Enable is released by
-   the binding that holds it, whether firmware or the driver set it.
-   (Code: `cxl_hdm_bi_live()`, `cxl_bi_release()`.)
+   discard one anyway (Table 9-13). So at teardown the device keeps its
+   Enable and every level on its path is held. Otherwise the Enable is
+   released by the binding that holds it, whether firmware or the
+   driver set it. A failed walk never holds (section 4). (Code:
+   `cxl_hdm_bi_live()`, `cxl_bi_release()`.)
 
 3. **A commit is owed when a level's BI-ID assignments change, never per
    register write.** Once for each device newly enabled below the level
@@ -161,7 +162,8 @@ unwind of a failed walk:
    disable reports "BI already disabled in hardware" and the binding's
    claim is dropped anyway;
 3. each level up the path, in the deallocate order of 9.14.2: drop this
-   endpoint's count; if the device is live, hold the level; at zero,
+   endpoint's count; if the device is live and this binding took its
+   BI up, hold the level; at zero,
    clear the role bits and commit, unless the level is held. A commit
    fault here is reported by the commit wait, the disable failure
    itself only at debug level ("BI dport disable failed"), and the walk
@@ -190,10 +192,11 @@ found up (adopted, or found up but not adoptable) is held and left as
 the walk left it: as found when the role was already right, or with the
 corrected role when the walk rewrote it (row 2). Only the level whose
 own commit failed is restored to its previous value. The device is
-never touched: its Enable is the last step of the
-walk and was not reached. If the device already decodes with BI (a
-firmware-committed decoder), every released level is held, as on
-teardown. Setup fails, the probe continues with BI off, no release
+never touched: its Enable is the last step of the walk and was not
+reached. This holds even if the device already decodes with BI (a
+firmware-committed decoder): an unwind never holds a level for it,
+since the walk failed before the device's BI was taken up and no path
+is left to keep. Setup fails, the probe continues with BI off, no release
 action is registered, an HDM-DB attach is refused, and a rebind runs the
 walk again from the same state.
 
@@ -239,17 +242,17 @@ clear because QEMU cannot stage a root port, so the driver writes them.
 | 4b | Device Enable set, both **switch levels** staged, RP clear | Both switch levels adopted; the RP written Forward (an RP never commits): zero commits | Device released if nothing decodes with BI; switch levels kept (found up); the RP cleared | As row 1 | t24 fw-path (bind only; the RP write not read back; unbind and rebind code-derived) |
 | 5 | Two firmware-enabled devices **sharing a level** | Each adopts its own staged levels. If the shared level is a clear RP, the first writes it and the second finds it counted: zero commits. If it is a staged transit DSP, the first adopts it and the second is refused there (counted) and commits from that level up: that DSP's decoder and its switch's RT, and the same again for every transit above it (none in t24's shape, so exactly two commits) | Each device released; a shared transit found up is kept; a shared RP the driver wrote is kept while the other is bound and cleared when the last leaves | As row 1 for each device | t24 fw-shared-rp, fw-shared-dsp (bind only; the RP is not read back in either; unbind and rebind code-derived) |
 | 6 | Device Enable set and a **committed BI decoder** that assembles into a region, RP clear (direct attach) | RP written Enable (no commit); device taken as found | Region detached and its decoder reset, so nothing decodes with BI; device released ("BI requests disabled"); RP cleared | As row 0: Enable released and decoder reset, nothing adopted | t24 adopt (bind and unbind; rebind code-derived), t16 bi (bind; its reboot leg is a fresh boot, not a rebind) |
-| 7 | A committed BI decoder that **never joins a region** (window refuses it, or an interleave peer never arrives) | As row 6 | The decoder stays committed: device **keeps** Enable, every level held | Adopted, zero commits | t16 neg proves only the window refusal, t16 mixed only that a mismatched interleave peer is refused, both that the endpoint survives; adoption, the decoder staying committed, the hold and the rebind are code-derived (ad-hoc runs only) |
+| 7 | A committed BI decoder that **never joins a region** (window refuses it, or an interleave peer never arrives) | As row 6 | The decoder stays committed: device **keeps** Enable, every level held | Adopted, zero commits | t24 fw-orphan (window refuses the decoder: adopted, no region; the unbind keeps BI Enable and holds the RP the walk brought up from zero; the rebind adopts and writes nothing); t16 orphan (an interleave peer that never commits: the auto region waits, the decoder keeps its type after the region is deleted; its unbind is not asserted); t16 neg, mixed (refusals, endpoint survives) |
 | 8 | A committed BI decoder that is **locked**, or in a locked region, whole path staged | As row 4a: adopted end to end, nothing written | Nothing can reset it: device keeps Enable, every level held; no "BI requests disabled" | Adopted again, zero commits, region still locked | t24 fw-locked (direct attach), fw-switch-locked (switch; zero commits asserted at the rebind only, the first bind checks the device line and the locked decoder; region still locked after rebind asserted there; endpoint and RP read back after unbind, DSP and RT not) |
-| 9 | Row 8 with a **driver-enabled sibling** under the same switch, RP staged | Sibling programs and commits its own DSP and the switch's RT; the shared RP counted, not written | Sibling leaving first: shared RP kept (count 2 → 1); locked device leaving last: RP kept (found up; the live hold would also keep it, which no suite isolates). Locked device leaving first is code-derived | As row 0 for the sibling, adopted for the locked device | t24 fw-switch-locked (one leave order; the sibling's DSP/RT commits are not counted and its rebind not asserted; the RP reads back Forward, which cannot distinguish "not written" from a same-value write) |
-| 10 | Row 8 behind **nested switches**, both devices unbound so the switch ports are deleted | — | Sibling's unbind leaves the transit up for the locked device | On the sibling's rebind the re-created transit dport is found up and held again | untested as a suite (ad-hoc QEMU run only; planned as a t25 scenario) |
-| 11 | Any of the above, then an **SBR** of the device (reset event in the Unbind column) | — | `.reset_done`: "BI disabled by reset", BI invalidated; attach and commit refused; unbind drops every count, clears the levels this driver brought up and keeps any held level | From scratch: nothing adopted | t27 no-region, switch, adopt-reset, accel; t34 arm 3 (driver-programmed levels only; a held level across a reset is code-derived) |
+| 9 | Row 8 with a **driver-enabled sibling** under the same switch, RP staged | Sibling programs and commits its own DSP and the switch's RT; the shared RP counted, not written | Sibling leaving first: shared RP kept (count 2 → 1); locked device leaving last: RP kept (found up; the live hold would also keep it, as t24 fw-orphan and t17 locked-remove show on levels brought up from zero). Locked device leaving first is code-derived | As row 0 for the sibling, adopted for the locked device | t24 fw-switch-locked (one leave order; the sibling's DSP/RT commits are not counted and its rebind not asserted; the RP reads back Forward, which cannot distinguish "not written" from a same-value write) |
+| 10 | Row 8 behind **nested switches**, both devices unbound so the switch ports are deleted | — | Sibling's unbind leaves the transit up for the locked device | On the sibling's rebind the re-created transit dport is found up and held again, so its next unbind still leaves the locked device's path up | t25 nested-hold |
+| 11 | Any of the above, then an **SBR** of the device (reset event in the Unbind column) | — | `.reset_done`: "BI disabled by reset", BI invalidated; attach and commit refused; unbind drops every count, clears the levels this driver brought up and keeps any held level | From scratch: nothing adopted | t27 no-region, switch, adopt-reset, accel; t34 arm 3; t27 held-reset (a held level across a reset: kept at the unbind, committed again on the rebind) |
 | 12 | Any of the above, then an **FLR** | — | Whatever the FLR preserved stays; the register is re-read and nothing is invalidated unless it reads clear | — | t27 flr (warning tracks the hardware), flr-region (QEMU preserves the register) |
-| 13 | A **commit fault** at some level during bind | Unwind: levels brought up by the walk cleared; found-up levels held and left with the role the walk gave them (as found, or corrected); device untouched; setup fails (logged, probe continues), BI off, HDM-DB attach refused | Nothing to release: no release action was registered | The walk runs again | t23 dsp-err/rt-err/dsp-tmo/rt-tmo (setup refused, bi=0), t25 rollback/shared-rollback (levels brought up cleared), t25 adopt-rollback (adopted level kept, RP never reached), t21 (attach refused); a found-up but not adopted level in an unwind is untested |
+| 13 | A **commit fault** at some level during bind | Unwind: levels brought up by the walk cleared, even when the device already decodes with BI; found-up levels held and left with the role the walk gave them (as found, or corrected); device untouched; setup fails (logged, probe continues), BI off, HDM-DB attach refused | Nothing to release: no release action was registered | The walk runs again | t23 dsp-err/rt-err/dsp-tmo/rt-tmo (setup refused, bi=0), t25 rollback/shared-rollback (levels brought up cleared), t25 adopt-rollback (adopted level kept, RP never reached), t25 live-rollback (a live decoder does not make the unwind hold), t21 (attach refused); a found-up but not adopted level in an unwind is untested |
 | 14 | A **commit fault during release** | — | Best effort: the clear is written, the fault logged ("BI dport disable failed"), the walk continues up and teardown completes | As bind | t23 dealloc-err (diagnostic and teardown completion; the written clear is not read back, the rebind is code-derived) |
 | 15 | Device Enable **cleared behind the driver** without a reset (firmware, another agent, /dev/mem) | — | Release finds the hardware already clear ("BI already disabled in hardware"), still drops every count; a region commit re-reads the device and refuses ("BI disabled by reset during commit") | From scratch | t34 arms 2 and 4 (the count drop is not read back on the RP: code-derived) |
 | 16 | A device whose path is **not BI capable** (no 256B Flit, no BI Decoder) | No walk; BI off; HDM-DB attach refused. A firmware-committed BI decoder on such a path fails the endpoint probe (2.1) | Nothing to release | — | t4 (no BI Decoder on the device), t35 (68B USP); t7/t8 (68B RP/DSP) SKIP on QEMU, whose flit knob does not reach LnkCtl2 |
-| 17 | **Hot-add / hot-remove** through pciehp | Hot-add: as row 0 for the new device | Orderly hot-remove: the region is detached and its decoder reset before release, so the device is disabled, the levels it alone held cleared, shared ones counted down. A removed device with a locked or never-regioned decoder would hold its levels; untested. Surprise removal reads all ones and is never live | Add after remove is a hot-add | t17 (device disable, the survivor's region and add-after-remove only; the removed device's DSP and the shared levels are not read back, so the clearing and count-down are code-derived) |
+| 17 | **Hot-add / hot-remove** through pciehp | Hot-add: as row 0 for the new device | Orderly hot-remove: the region is detached and its decoder reset before release, so the device is disabled, the levels it alone held cleared, shared ones counted down. A removed device whose decoder is locked holds its levels: no disable, its adjacent DSP kept at Enable. Surprise removal reads all ones and is never live | Add after remove is a hot-add | t17 (device disable, the survivor's region and add-after-remove; the removed device's DSP and the shared levels are not read back, so the clearing and count-down are code-derived); t17 locked-remove (live decoder: no disable, adjacent DSP held at Enable, survivor commits) |
 
 ## 7. What is never done
 
@@ -266,11 +269,13 @@ clear because QEMU cannot stage a root port, so the driver writes them.
 
 ## 8. What the suites cannot show
 
-QEMU does not implement Lock On Commit: writes to a locked decoder land.
-The locked rows pass because the driver never writes a locked decoder,
-not because the emulation refuses; real lock enforcement is verified by
-reading the specification. QEMU also returns zero, not all ones, for a
-removed device, so the surprise-removal branch of the live check is
-untested. Row 7's unbind and rebind, all of row 10, and every cell
-marked code-derived above are backed only by the rules and ad-hoc runs
-on the QEMU knobs, not by suites.
+Upstream QEMU does not implement Lock On Commit: writes to a locked
+decoder land. The suites were last run on QEMU with Lock On Commit
+enforced (a committed, locked decoder drops every write to its
+registers; "hw/cxl: Enforce Lock On Commit on HDM decoders", not yet
+upstream), so the locked rows pass both because the driver never writes
+a locked decoder and because the emulated decoder refuses it. On
+upstream QEMU only the former is shown. QEMU also returns zero, not all
+ones, for a removed device, so the surprise-removal branch of the live
+check is untested. Every cell marked code-derived above is backed only
+by the rules and ad-hoc runs on the QEMU knobs, not by suites.
