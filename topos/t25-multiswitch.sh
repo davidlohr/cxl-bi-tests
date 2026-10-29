@@ -528,4 +528,248 @@ else
 	g dmesg > "$OUT/t25-shared-rollback.dmesg" 2>/dev/null
 fi
 
+# --- scenario 6: a hold survives its switch ports being re-created ----
+# rp0 - us0 - dsp0 - us1 - {dsp1a - memA, dsp1b - memB}. memA gets a
+# committed, locked BI decoder (staged behind the driver), so its unbind
+# holds every level on its path. Once both endpoints unbind, us0's and
+# us1's ports are deleted; memB then rebinds alone through re-created
+# dports that remember nothing. The transit dsp0 must be found up and
+# held again on that first use, so memB's second unbind still leaves
+# memA's path up: dsp1a Enable, dsp0 and the RP Forward. Only memB's
+# own adjacent DSP, brought up from zero each time, is ever cleared.
+wait_mem_driver() { # wait_mem_driver <bound|unbound> <memdev>
+	g "for i in \$(seq 1 40); do
+		[ -e /sys/bus/cxl/devices/$2/driver ] && p=bound || p=unbound
+		[ \$p = $1 ] && break; sleep 0.5; done"
+}
+stage_ep_locked() { # commit HDM decoder 0 with BI + Lock On Commit
+	g "python3 - <<'PYEOF'
+import ctypes, mmap, os
+BASE, SIZE = 0x190000000, 0x40000000
+base = int(open('/sys/bus/pci/devices/$1/resource').readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+def w32(o, v): ctypes.c_uint32.from_buffer(m, o).value = v
+h = [(u32(4 + 4*i) >> 20) & 0xfff for i in range((u32(0) >> 24) & 0xff)
+     if (u32(4 + 4*i) & 0xffff) == 5][0]
+w32(h + 4, u32(h + 4) | 0x2)
+w32(h + 0x10, BASE & 0xffffffff); w32(h + 0x14, BASE >> 32)
+w32(h + 0x18, SIZE & 0xffffffff); w32(h + 0x1c, SIZE >> 32)
+w32(h + 0x24, 0); w32(h + 0x28, 0)
+w32(h + 0x20, (1 << 9) | (1 << 13) | (1 << 8))
+print('%#x' % u32(h + 0x20))
+PYEOF"
+}
+nbound() { g 'n=0; for m in /sys/bus/cxl/devices/mem*; do [ -e $m/driver ] && n=$((n+1)); done; echo $n'; }
+launch_qemu \
+  -object memory-backend-ram,id=m0,size=1G \
+  -object memory-backend-ram,id=m1,size=1G \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on \
+  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
+  -device cxl-downstream,port=0,bus=us1,id=dsp1a,chassis=0,slot=6,x-256b-flit=on \
+  -device cxl-downstream,port=1,bus=us1,id=dsp1b,chassis=0,slot=7,x-256b-flit=on \
+  -device cxl-type3,bus=dsp1a,volatile-memdev=m0,id=vmemA,x-256b-flit=on,hdm-db=on \
+  -device cxl-type3,bus=dsp1b,volatile-memdev=m1,id=vmemB,x-256b-flit=on,hdm-db=on \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on \
+  || { fail "nested-hold: qemu launch"; exit 1; }
+if wait_for_guest 180 && [ "$(nbound)" = 2 ]; then
+	ok "nested-hold: guest booted, both endpoints bound"
+else
+	fail "nested-hold: guest booted, both endpoints bound"; exit 1
+fi
+# memA/memB: kernel memdev names; adjacent DSPs from their sysfs paths
+pA=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+pB=$(g 'readlink -f /sys/bus/cxl/devices/mem1')
+memA=mem0; memB=mem1
+epA=$(awk -F/ '{print $(NF-1)}' <<<"$pA")
+adjA=$(awk -F/ '{print $(NF-2)}' <<<"$pA")
+adjB=$(awk -F/ '{print $(NF-2)}' <<<"$pB")
+dsp0=$(awk -F/ '{print $(NF-4)}' <<<"$pA")
+rp=$(awk -F/ '{print $(NF-6)}' <<<"$pA")
+echo "# memA=$memA ep=$epA adj=$adjA, memB=$memB adj=$adjB, dsp0=$dsp0 rp=$rp"
+if [ -z "$(role "$rp")" ]; then
+	for i in $(seq 1 10); do
+		skip "nested-hold: register truth (no /dev/mem)"
+	done
+else
+	g "echo $memA > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	wait_mem_driver unbound $memA
+	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	wait_mem_driver unbound $memB
+	sleep 3
+	dctl=$(stage_ep_locked "$epA")
+	if [ $(( dctl & 0x2500 )) = $(( 0x2500 )) ]; then
+		ok "nested-hold: memA decoder committed with BI and locked ($dctl)"
+	else
+		fail "nested-hold: memA decoder committed with BI and locked ($dctl)"
+	fi
+	g "dmesg -C"
+	g "echo $memA > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
+	wait_mem_driver bound $memA
+	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
+	wait_mem_driver bound $memB
+	r="$(role "$adjA") $(role "$adjB") $(role "$dsp0") $(role "$rp")"
+	[ "$r" = "2 2 1 1" ] &&
+		ok "nested-hold: both bound, path up (adjacent Enable, transit and RP Forward)" ||
+		fail "nested-hold: both bound, path up (got adjA adjB dsp0 rp = $r)"
+	g "echo $memA > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	wait_mem_driver unbound $memA
+	read -r _ ectl _ <<<"$(bi_regs "$epA" 0xC)"
+	if ! g dmesg | grep -q "BI requests disabled" &&
+	   [ $(( ectl & 0x2 )) = 2 ]; then
+		ok "nested-hold: memA keeps BI Enable on unbind (decoder live)"
+	else
+		fail "nested-hold: memA keeps BI Enable on unbind (ctrl $ectl)"
+	fi
+	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	wait_mem_driver unbound $memB
+	sleep 3
+	r="$(role "$adjA") $(role "$adjB") $(role "$dsp0") $(role "$rp")"
+	[ "$r" = "2 0 1 1" ] &&
+		ok "nested-hold: both unbound, memA's path held, memB's adjacent cleared" ||
+		fail "nested-hold: both unbound, memA's path held, memB's adjacent cleared (got $r)"
+	nports=$(g 'ls -d /sys/bus/cxl/devices/port* 2>/dev/null | wc -l')
+	[ "$nports" = 1 ] &&
+		ok "nested-hold: switch ports deleted with both endpoints gone" ||
+		fail "nested-hold: switch ports deleted with both endpoints gone ($nports ports)"
+	g "dmesg -C"
+	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
+	wait_mem_driver bound $memB
+	if [ "$(nbound)" = 1 ] && g dmesg | grep -q "BI requests enabled"; then
+		ok "nested-hold: memB rebinds alone through re-created ports"
+	else
+		fail "nested-hold: memB rebinds alone through re-created ports"
+	fi
+	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	wait_mem_driver unbound $memB
+	sleep 3
+	[ "$(role "$adjB")" = 0 ] &&
+		ok "nested-hold: memB's adjacent cleared again" ||
+		fail "nested-hold: memB's adjacent cleared again ($(role "$adjB"))"
+	[ "$(role "$dsp0")" = 1 ] &&
+		ok "nested-hold: re-created transit held again (Forward kept)" ||
+		fail "nested-hold: re-created transit held again ($(role "$dsp0"))"
+	[ "$(role "$rp")" = 1 ] &&
+		ok "nested-hold: RP Forward kept" ||
+		fail "nested-hold: RP Forward kept ($(role "$rp"))"
+	read -r _ ectl _ <<<"$(bi_regs "$epA" 0xC)"
+	[ "$(role "$adjA")" = 2 ] && [ $(( ectl & 0x2 )) = 2 ] &&
+		ok "nested-hold: memA's adjacent and BI Enable intact" ||
+		fail "nested-hold: memA's adjacent and BI Enable intact (adj $(role "$adjA") ep $ectl)"
+fi
+dm=$(g dmesg)
+grep -qE "$SPLAT_RE" <<<"$dm" &&
+	fail "nested-hold: no splat" || ok "nested-hold: no splat"
+oracle_silent "nested-hold"
+g dmesg > "$OUT/t25-nested-hold.dmesg" 2>/dev/null
+
+# --- scenario 7: a failed walk never holds, even for a live decoder ---
+# rp0 - us0 - dsp0 (commit fault) - us1 - dsp1 - mem0. The device gets
+# a decoder committed with BI behind the driver, so it decodes with BI
+# while the rebind walk brings dsp1 up from zero and then fails at
+# dsp0. The unwind runs before the device's BI was taken up: it must
+# clear dsp1 like any level this walk brought up, rather than hold it
+# for the live decoder, and leave the device and its decoder alone.
+hdm0_ctrl() { # hdm0_ctrl <bdf> [stage] -> HDM decoder 0 control
+	g "python3 - <<'PYEOF'
+import ctypes, mmap, os
+BASE, SIZE = 0x190000000, 0x40000000
+base = int(open('/sys/bus/pci/devices/$1/resource').readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+def w32(o, v): ctypes.c_uint32.from_buffer(m, o).value = v
+h = [(u32(4 + 4*i) >> 20) & 0xfff for i in range((u32(0) >> 24) & 0xff)
+     if (u32(4 + 4*i) & 0xffff) == 5][0]
+if '$2' == 'stage':
+    w32(h + 4, u32(h + 4) | 0x2)
+    w32(h + 0x10, BASE & 0xffffffff); w32(h + 0x14, BASE >> 32)
+    w32(h + 0x18, SIZE & 0xffffffff); w32(h + 0x1c, SIZE >> 32)
+    w32(h + 0x24, 0); w32(h + 0x28, 0)
+    w32(h + 0x20, (1 << 9) | (1 << 13))
+print('%#x' % u32(h + 0x20))
+PYEOF"
+}
+if ! "$QEMU" -device cxl-downstream,help 2>/dev/null | grep -q "x-bi-commit-fault"
+then
+	for i in $(seq 1 11); do
+		skip "live-rollback: qemu lacks x-bi-commit-fault"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-commit-fault=error \
+	  -device cxl-upstream,bus=dsp0,id=us1,x-256b-flit=on \
+	  -device cxl-downstream,port=0,bus=us1,id=dsp1,chassis=0,slot=6,x-256b-flit=on \
+	  -device cxl-type3,bus=dsp1,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	if wait_for_guest 180; then
+		ok "live-rollback: guest booted"
+	else
+		fail "live-rollback: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	grep -q "BI-ID commit rejected by hardware" <<<"$dm" &&
+	grep -q "BI setup failed" <<<"$dm" &&
+		ok "live-rollback: boot walk refused at the faulted transit" ||
+		fail "live-rollback: boot walk refused at the faulted transit"
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+	adj=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	transit=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	rp=$(awk -F/ '{print $(NF-6)}' <<<"$path")
+	if [ -z "$(role "$adj")" ]; then
+		for i in $(seq 1 7); do
+			skip "live-rollback: register truth (no /dev/mem)"
+		done
+	else
+		g "echo mem0 > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+		wait_mem_driver unbound mem0
+		dctl=$(hdm0_ctrl "$ep" stage)
+		[ $(( dctl & 0x2400 )) = $(( 0x2400 )) ] &&
+			ok "live-rollback: decoder committed with BI behind the driver ($dctl)" ||
+			fail "live-rollback: decoder committed with BI behind the driver ($dctl)"
+		g "dmesg -C"
+		g "echo mem0 > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
+		wait_mem_driver bound mem0
+		sleep 2
+		dm=$(g dmesg)
+		grep -q "BI setup failed" <<<"$dm" &&
+			ok "live-rollback: rebind walk refused again" ||
+			fail "live-rollback: rebind walk refused again"
+		read -r _ ectl _ <<<"$(bi_regs "$ep" 0xC)"
+		if ! grep -q "BI requests enabled" <<<"$dm" &&
+		   [ $(( ectl & 0x2 )) = 0 ]; then
+			ok "live-rollback: device BI never written"
+		else
+			fail "live-rollback: device BI never written (ctrl $ectl)"
+		fi
+		[ "$(role "$adj")" = 0 ] &&
+			ok "live-rollback: adjacent DSP cleared, not held for the live decoder" ||
+			fail "live-rollback: adjacent DSP cleared, not held for the live decoder ($(role "$adj"))"
+		[ "$(role "$transit")" = 0 ] &&
+			ok "live-rollback: faulted transit restored" ||
+			fail "live-rollback: faulted transit restored ($(role "$transit"))"
+		[ "$(role "$rp")" = 0 ] &&
+			ok "live-rollback: RP never reached" ||
+			fail "live-rollback: RP never reached ($(role "$rp"))"
+		dctl2=$(hdm0_ctrl "$ep")
+		[ $(( dctl2 & 0x2400 )) = $(( 0x2400 )) ] &&
+			ok "live-rollback: decoder still committed with BI" ||
+			fail "live-rollback: decoder still committed with BI ($dctl2)"
+	fi
+	dm=$(g dmesg)
+	grep -qE "$SPLAT_RE" <<<"$dm" &&
+		fail "live-rollback: no splat" || ok "live-rollback: no splat"
+	oracle_silent "live-rollback"
+	g dmesg > "$OUT/t25-live-rollback.dmesg" 2>/dev/null
+fi
+
 exit $((FAIL != 0))
