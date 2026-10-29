@@ -1248,4 +1248,124 @@ else
 	g dmesg > "$OUT/t24-fw-switch-locked.dmesg" 2>/dev/null
 fi
 
+# --- scenario 11: a committed BI decoder no region takes up -----------
+# Firmware committed the decoder with BI, but the window lacks the BI
+# restriction, so region construction refuses it (9.18.1.3) and it
+# stays committed with no region. The device is still entitled to
+# BISnp for that range (Table 8-157), so teardown must keep its BI
+# Enable and hold the RP the walk brought up from zero (qemu cannot
+# stage an RP): this hold comes from the live decoder, not from a
+# level found up. A rebind adopts again and writes nothing.
+if ! "$QEMU" -device cxl-type3,help 2>/dev/null | grep -q "x-committed"
+then
+	for i in $(seq 1 14); do
+		skip "fw-orphan: qemu cxl-type3 lacks x-committed"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-type3,bus=rp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on,x-committed=hdm-db \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k
+	if wait_for_guest 180; then
+		ok "fw-orphan: guest booted"
+	else
+		fail "fw-orphan: guest booted"; exit 1
+	fi
+	dm=$(g dmesg)
+	if [ "$(grep -c 'adopting firmware-enabled BI' <<<"$dm")" = 1 ]; then
+		ok "fw-orphan: endpoint adopted"
+	else
+		fail "fw-orphan: endpoint adopted"
+	fi
+	if grep -q "coherency model not permitted by the window" <<<"$dm"; then
+		ok "fw-orphan: window refuses the BI decoder"
+	else
+		fail "fw-orphan: window refuses the BI decoder"
+	fi
+	if [ -z "$(g 'ls -d /sys/bus/cxl/devices/region* 2>/dev/null')" ]; then
+		ok "fw-orphan: no region assembled"
+	else
+		fail "fw-orphan: no region assembled"
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	rp=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+	read -r _ rctrl _ <<<"$(bi_regs "$rp" 0xC)"
+	read -r _ ectrl _ <<<"$(bi_regs "$ep" 0xC)"
+	if [ -z "$rctrl" ] || [ -z "$ectrl" ]; then
+		skip "fw-orphan: RP programmed Enable (no /dev/mem)"
+		skip "fw-orphan: endpoint Enable staged (no /dev/mem)"
+	else
+		if [ $(( rctrl & 0x3 )) = 2 ]; then
+			ok "fw-orphan: RP programmed Enable (brought up from zero)"
+		else
+			fail "fw-orphan: RP programmed Enable ($rctrl)"
+		fi
+		if [ $(( ectrl & 0x2 )) = 2 ]; then
+			ok "fw-orphan: endpoint Enable staged"
+		else
+			fail "fw-orphan: endpoint Enable staged ($ectrl)"
+		fi
+	fi
+	g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+	wait_memdev absent
+	dm=$(g dmesg)
+	if grep -q "BI requests disabled" <<<"$dm"; then
+		fail "fw-orphan: endpoint keeps BI on unbind (decoder live)"
+	else
+		ok "fw-orphan: endpoint keeps BI on unbind (decoder live)"
+	fi
+	read -r _ ectrl2 _ <<<"$(bi_regs "$ep" 0xC)"
+	read -r _ rctrl2 _ <<<"$(bi_regs "$rp" 0xC)"
+	dctl=$(hdm_dec0 "$ep")
+	if [ -z "$ectrl2" ] || [ -z "$rctrl2" ] || [ -z "$dctl" ]; then
+		skip "fw-orphan: endpoint Enable kept (no /dev/mem)"
+		skip "fw-orphan: RP held for the live decoder (no /dev/mem)"
+		skip "fw-orphan: decoder still committed with BI (no /dev/mem)"
+	else
+		if [ $(( ectrl2 & 0x2 )) = 2 ]; then
+			ok "fw-orphan: endpoint Enable kept"
+		else
+			fail "fw-orphan: endpoint Enable kept ($ectrl2)"
+		fi
+		if [ $(( rctrl2 & 0x3 )) = 2 ]; then
+			ok "fw-orphan: RP held for the live decoder"
+		else
+			fail "fw-orphan: RP held for the live decoder ($rctrl2)"
+		fi
+		if [ $(( dctl & 0x2400 )) = $(( 0x2400 )) ]; then
+			ok "fw-orphan: decoder still committed with BI"
+		else
+			fail "fw-orphan: decoder still committed with BI ($dctl)"
+		fi
+	fi
+	if grep -qE "$SPLAT_RE" <<<"$dm"; then
+		fail "fw-orphan: no splat across teardown"
+	else
+		ok "fw-orphan: no splat across teardown"
+	fi
+	g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+	wait_memdev present
+	wait_mem_driver bound
+	dm=$(g dmesg)
+	if [ "$(grep -c 'adopting firmware-enabled BI' <<<"$dm")" = 2 ] &&
+	   ! grep -q "BI requests enabled" <<<"$dm"; then
+		ok "fw-orphan: rebind adopts again, endpoint not written"
+	else
+		fail "fw-orphan: rebind adopts again, endpoint not written"
+	fi
+	read -r _ rctrl3 _ <<<"$(bi_regs "$rp" 0xC)"
+	if [ -z "$rctrl3" ]; then
+		skip "fw-orphan: RP unchanged across rebind (no /dev/mem)"
+	elif [ "$rctrl3" = "$rctrl2" ]; then
+		ok "fw-orphan: RP unchanged across rebind"
+	else
+		fail "fw-orphan: RP unchanged across rebind ($rctrl2 -> $rctrl3)"
+	fi
+	oracle_silent "fw-orphan"
+	g dmesg > "$OUT/t24-fw-orphan.dmesg" 2>/dev/null
+fi
+
 exit $((FAIL != 0))
