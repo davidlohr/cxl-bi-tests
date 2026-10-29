@@ -886,4 +886,110 @@ else
 	g dmesg > "$OUT/t27-accel.dmesg" 2>/dev/null
 fi
 
+# --- scenario 7: a held level across a reset -------------------------
+# The DSP is staged Enable and committed (x-bi-committed), the device
+# is not firmware-enabled: the walk finds the DSP up, holds it, writes
+# nothing there and commits for the new device; the RP it brings up
+# from zero. A reset then wipes the endpoint's BI and invalidates
+# cxlds->bi. The unbind that follows must leave the device alone,
+# keep the held DSP as found and clear only the RP; a rebind starts
+# from scratch: nothing adopted, the DSP committed again, the device
+# enabled again.
+if ! "$QEMU" -device cxl-downstream,help 2>/dev/null | grep -q "x-bi-committed" ||
+   ! "$QEMU" -device cxl-upstream,help 2>/dev/null | grep -q "x-bi-rt-committed"; then
+	for i in $(seq 1 12); do
+		skip "held-reset: qemu lacks x-bi-committed/x-bi-rt-committed"
+	done
+else
+	launch_qemu \
+	  -object memory-backend-ram,id=m0,size=1G \
+	  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+	  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+	  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on,x-bi-rt-committed=on \
+	  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on,x-bi-committed=on \
+	  -device cxl-type3,bus=dsp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+	  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+	if wait_for_guest 180; then
+		ok "held-reset: guest booted"
+	else
+		fail "held-reset: guest booted"; exit 1
+	fi
+	path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+	ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+	dsp=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+	rp=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+	dm=$(g dmesg)
+	dctl=$(bi_ctrl "$dsp"); rctl=$(bi_ctrl "$rp")
+	if [ -n "$dctl" ] && [ $(( dctl & 0x3 )) = 2 ] &&
+	   [ $(( rctl & 0x3 )) = 1 ] &&
+	   grep -q "BI requests enabled" <<<"$dm" &&
+	   ! grep -q "adopting firmware-enabled BI" <<<"$dm"; then
+		ok "held-reset: staged DSP found up, device enabled by the driver"
+	else
+		fail "held-reset: staged DSP found up, device enabled by the driver (dsp '$dctl' rp '$rctl')"
+	fi
+	g "dmesg -C" >/dev/null
+	if do_reset "held-reset" "$ep"; then
+		ok "held-reset: reset issued through the kernel"
+	else
+		fail "held-reset: reset issued through the kernel"; exit 1
+	fi
+	dm=$(g dmesg)
+	ec=$(bi_ctrl "$ep")
+	if [ -z "$ec" ] || [ $(( ec & 0x2 )) != 0 ]; then
+		for i in $(seq 1 7); do
+			skip "held-reset: post-reset state (premise absent: ctrl='$ec')"
+		done
+	else
+		ok "held-reset: hardware cleared endpoint BI"
+		if grep -q "BI disabled by reset" <<<"$dm"; then
+			ok "held-reset: kernel invalidates cxlds->bi"
+		else
+			fail "held-reset: kernel invalidates cxlds->bi"
+		fi
+		g "dmesg -C" >/dev/null
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+		for i in $(seq 1 30); do
+			g "test -e /sys/bus/pci/devices/$ep/driver" || break
+		done
+		dm=$(g dmesg)
+		grep -q "BI requests disabled" <<<"$dm" &&
+			fail "held-reset: unbind leaves the reset device alone" ||
+			ok "held-reset: unbind leaves the reset device alone"
+		dctl2=$(bi_ctrl "$dsp"); rctl2=$(bi_ctrl "$rp")
+		[ $(( dctl2 & 0x3 )) = 2 ] &&
+			ok "held-reset: unbind keeps the held DSP as found" ||
+			fail "held-reset: unbind keeps the held DSP as found ($dctl2)"
+		[ $(( rctl2 & 0x3 )) = 0 ] &&
+			ok "held-reset: unbind clears the RP it brought up" ||
+			fail "held-reset: unbind clears the RP it brought up ($rctl2)"
+		g "dmesg -C" >/dev/null
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+		for i in $(seq 1 40); do
+			g "test -e /sys/bus/cxl/devices/mem0/driver" && break
+			sleep 0.5
+		done
+		dm=$(g dmesg)
+		if grep -q "BI requests enabled" <<<"$dm" &&
+		   ! grep -q "adopting firmware-enabled BI" <<<"$dm"; then
+			ok "held-reset: rebind enables from scratch"
+		else
+			fail "held-reset: rebind enables from scratch"
+		fi
+		nc=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+		dctl3=$(bi_ctrl "$dsp"); rctl3=$(bi_ctrl "$rp")
+		if [ "$nc" = 2 ] && [ $(( dctl3 & 0x3 )) = 2 ] &&
+		   [ $(( rctl3 & 0x3 )) = 1 ]; then
+			ok "held-reset: rebind commits the held DSP again, path up"
+		else
+			fail "held-reset: rebind commits the held DSP again, path up (commits $nc dsp $dctl3 rp $rctl3)"
+		fi
+	fi
+	dm=$(g dmesg)
+	grep -qE "$SPLAT_RE" <<<"$dm" &&
+		fail "held-reset: no splat" || ok "held-reset: no splat"
+	oracle_silent "held-reset"
+	g dmesg > "$OUT/t27-held-reset.dmesg" 2>/dev/null
+fi
+
 exit $((FAIL != 0))
