@@ -218,6 +218,104 @@ case $out in
 *)	 fail "HDM-DB region commits after a prior hot-remove (got '$out')" ;;
 esac
 gh rmreg_all
+# --- scenario 5: hot-remove a device whose decoder is locked ----------
+# sn=0x173 gets HDM decoder 0 committed with BI and Lock On Commit,
+# staged behind the driver while cxl_mem is unbound, so it enumerates
+# locked on rebind. Its hot-remove then tears the endpoint down while
+# that decoder still decodes with BI: BI must be kept for it (no
+# disable), its adjacent DSP held at Enable, nothing may WARN, and the
+# survivor's path must still commit.
+bi_role() { # bi_role <bdf> -> BI Decoder Control & 3, empty on failure
+	g "python3 - <<'PYEOF'
+import ctypes, mmap, os
+base = int(open('/sys/bus/pci/devices/$1/resource').readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+off = [(u32(4 + 4*i) >> 20) & 0xfff for i in range((u32(0) >> 24) & 0xff)
+       if (u32(4 + 4*i) & 0xffff) == 0xc][0]
+print(u32(off + 4) & 3)
+PYEOF"
+}
+stage_locked() { # commit HDM decoder 0 with BI + Lock On Commit
+	g "python3 - <<'PYEOF'
+import ctypes, mmap, os
+BASE, SIZE = 0x250000000, 0x10000000
+base = int(open('/sys/bus/pci/devices/$1/resource').readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+def w32(o, v): ctypes.c_uint32.from_buffer(m, o).value = v
+h = [(u32(4 + 4*i) >> 20) & 0xfff for i in range((u32(0) >> 24) & 0xff)
+     if (u32(4 + 4*i) & 0xffff) == 5][0]
+w32(h + 4, u32(h + 4) | 0x2)
+w32(h + 0x10, BASE & 0xffffffff); w32(h + 0x14, BASE >> 32)
+w32(h + 0x18, SIZE & 0xffffffff); w32(h + 0x1c, SIZE >> 32)
+w32(h + 0x24, 0); w32(h + 0x28, 0)
+w32(h + 0x20, (1 << 9) | (1 << 13) | (1 << 8))
+print('%#x' % u32(h + 0x20))
+PYEOF"
+}
+mem3=$(gh mem_of_sn 0x173)
+p3=$(g "readlink -f /sys/bus/cxl/devices/$mem3")
+ep3=$(awk -F/ '{print $(NF-1)}' <<<"$p3")
+adj3=$(awk -F/ '{print $(NF-2)}' <<<"$p3")
+echo "# locked-remove: $mem3 ep=$ep3 adj=$adj3"
+if [ -z "$(bi_role "$adj3")" ]; then
+	for i in $(seq 1 7); do
+		skip "locked-remove: register staging (no /dev/mem)"
+	done
+else
+	g "echo $mem3 > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
+	for i in $(seq 1 40); do
+		g "test -e /sys/bus/cxl/devices/$mem3/driver" || break
+		sleep 0.5
+	done
+	dctl=$(stage_locked "$ep3")
+	g "echo $mem3 > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
+	wait_sn_state 0x173 present 30
+	if [ $(( dctl & 0x2500 )) = $(( 0x2500 )) ]; then
+		ok "locked-remove: sn=0x173 decoder committed with BI and locked ($dctl)"
+	else
+		fail "locked-remove: sn=0x173 decoder committed with BI and locked ($dctl)"
+	fi
+	d3=$(gh dec_of_sn 0x173)
+	if [ "$(g cat /sys/bus/cxl/devices/$d3/locked)" = 1 ]; then
+		ok "locked-remove: rebound with the decoder enumerated locked"
+	else
+		fail "locked-remove: rebound with the decoder enumerated locked ($d3)"
+	fi
+	gh rmreg_all
+	g "dmesg -C"
+	qmp_cmd '{"execute":"device_del","arguments":{"id":"hp-m2"}}' >/dev/null
+	if wait_sn_state 0x173 absent 30; then
+		ok "locked-remove: hot-remove completed guest-side"
+	else
+		fail "locked-remove: hot-remove completed guest-side (timeout)"
+	fi
+	if [ "$(dmesg_count 'BI requests disabled')" = 0 ]; then
+		ok "locked-remove: BI kept for the live decoder (no disable)"
+	else
+		fail "locked-remove: BI kept for the live decoder (no disable)"
+	fi
+	if [ "$(bi_role "$adj3")" = 2 ]; then
+		ok "locked-remove: adjacent DSP held at Enable"
+	else
+		fail "locked-remove: adjacent DSP held at Enable ($(bi_role "$adj3"))"
+	fi
+	if [ "$(g dmesg | grep -cE "$SPLAT_RE")" = 0 ]; then
+		ok "locked-remove: no WARN/BUG/lockdep splat"
+	else
+		fail "locked-remove: no WARN/BUG/lockdep splat"
+		g dmesg | grep -E "$SPLAT_RE" | head -3 | sed 's/^/# /'
+	fi
+	out=$(gh mkreg_sn 0x172)
+	case $out in
+	*"bi=1") ok "locked-remove: survivor still commits" ;;
+	*)	 fail "locked-remove: survivor still commits (got '$out')" ;;
+	esac
+	gh rmreg_all
+fi
 if [ "$(g dmesg | grep -c 'BI setup failed')" = 0 ]; then
 	ok "no 'BI setup failed' across the hotplug lifecycle"
 else
