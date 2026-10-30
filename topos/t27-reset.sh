@@ -992,4 +992,166 @@ else
 	g dmesg > "$OUT/t27-held-reset.dmesg" 2>/dev/null
 fi
 
+# --- scenario 8: a reset above a switch ------------------------------
+# The bus reset comes from the root port, so it lands above the switch:
+# the switch's DSP BI decoder and USP route table are wiped with the
+# endpoint, while the root port keeps its Forward. Only the endpoint's
+# .reset_done sees it; the dports below the boundary keep their counts
+# although their registers now read cleared. The unbind must leave the
+# device alone and unwind every level without a splat, and a rebind
+# must program and commit the switch levels again from scratch.
+rt_ctrl() { # rt_ctrl <usp-bdf> -> BI RT Control (cap ID 0xB), empty on failure
+	g "python3 - <<'PYEOF'
+import ctypes, mmap, os
+base = int(open('/sys/bus/pci/devices/$1/resource').readline().split()[0], 16)
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 4096, offset=base + 0x1000)
+u32 = lambda o: ctypes.c_uint32.from_buffer(m, o).value
+o = [(u32(4 + 4*i) >> 20) & 0xfff for i in range((u32(0) >> 24) & 0xff)
+     if (u32(4 + 4*i) & 0xffff) == 0xb]
+print('%#x' % u32(o[0] + 4))
+PYEOF"
+}
+sbr_unmask() { # sbr_unmask <bridge-bdf> <1|0> -> CXL DVSEC Port Control after the write
+	g "python3 - <<'PYEOF'
+import struct
+p = '/sys/bus/pci/devices/$1/config'
+cfg = open(p, 'rb').read()
+off = 0x100
+while off and off < len(cfg) - 4:
+    hdr = struct.unpack_from('<I', cfg, off)[0]
+    if ((hdr & 0xffff) == 0x23 and
+        struct.unpack_from('<H', cfg, off + 4)[0] == 0x1e98 and
+        struct.unpack_from('<H', cfg, off + 8)[0] == 3):
+        break
+    off = hdr >> 20
+ctl = struct.unpack_from('<H', cfg, off + 0xc)[0]
+ctl = (ctl | 1) if $2 else (ctl & ~1)
+with open(p, 'r+b') as f:
+    f.seek(off + 0xc); f.write(struct.pack('<H', ctl))
+print('%#x' % struct.unpack_from('<H', open(p, 'rb').read(), off + 0xc)[0])
+PYEOF"
+}
+launch_qemu \
+  -object memory-backend-ram,id=m0,size=1G \
+  -device pxb-cxl,bus_nr=12,bus=pcie.0,id=cxl.1 \
+  -device cxl-rp,port=0,bus=cxl.1,id=rp0,chassis=0,slot=2,x-256b-flit=on \
+  -device cxl-upstream,bus=rp0,id=us0,x-256b-flit=on \
+  -device cxl-downstream,port=0,bus=us0,id=dsp0,chassis=0,slot=4,x-256b-flit=on \
+  -device cxl-type3,bus=dsp0,volatile-memdev=m0,id=mem0,x-256b-flit=on,hdm-db=on \
+  -M cxl-fmw.0.targets.0=cxl.1,cxl-fmw.0.size=4G,cxl-fmw.0.interleave-granularity=4k,cxl-fmw.0.back-invalidate=on
+if wait_for_guest 180; then
+	ok "switch-sbr: guest booted"
+else
+	fail "switch-sbr: guest booted"; exit 1
+fi
+path=$(g 'readlink -f /sys/bus/cxl/devices/mem0')
+ep=$(awk -F/ '{print $(NF-1)}' <<<"$path")
+dsp=$(awk -F/ '{print $(NF-2)}' <<<"$path")
+usp=$(awk -F/ '{print $(NF-3)}' <<<"$path")
+rp=$(awk -F/ '{print $(NF-4)}' <<<"$path")
+dctl=$(bi_ctrl "$dsp"); rctl=$(bi_ctrl "$rp"); ectl=$(bi_ctrl "$ep")
+if [ -n "$dctl" ] && [ $(( dctl & 0x3 )) = 2 ] && [ $(( rctl & 0x3 )) = 1 ] &&
+   [ $(( ectl & 0x2 )) = 2 ]; then
+	ok "switch-sbr: path up before the reset (DSP Enable, RP Forward, device enabled)"
+else
+	fail "switch-sbr: path up before the reset (dsp '$dctl' rp '$rctl' ep '$ectl')"
+fi
+if ! g "test -w /sys/bus/pci/devices/$rp/reset_subordinate"; then
+	for i in $(seq 1 10); do
+		skip "switch-sbr: root port has no reset_subordinate"
+	done
+else
+	g "dmesg -C" >/dev/null
+	# a CXL port masks SBR by default; unmask it around the reset as
+	# the cxl_bus reset method does
+	sbr_unmask "$rp" 1 >/dev/null
+	if g "echo 1 > /sys/bus/pci/devices/$rp/reset_subordinate"; then
+		ok "switch-sbr: bus reset issued from the root port"
+	else
+		fail "switch-sbr: bus reset issued from the root port"
+	fi
+	sbr_unmask "$rp" 0 >/dev/null
+	sleep 2
+	dm=$(g dmesg)
+	ec=$(bi_ctrl "$ep")
+	if [ -z "$ec" ] || [ $(( ec & 0x2 )) != 0 ]; then
+		for i in $(seq 1 9); do
+			skip "switch-sbr: post-reset state (premise absent: ctrl='$ec')"
+		done
+	else
+		ok "switch-sbr: hardware cleared endpoint BI"
+		grep -q "BI disabled by reset" <<<"$dm" &&
+			ok "switch-sbr: kernel invalidates cxlds->bi" ||
+			fail "switch-sbr: kernel invalidates cxlds->bi"
+		dctl=$(bi_ctrl "$dsp"); uctl=$(rt_ctrl "$usp")
+		[ $(( dctl & 0x3 )) = 0 ] && [ -n "$uctl" ] && [ $(( uctl )) = 0 ] &&
+			ok "switch-sbr: switch DSP and route table wiped below the boundary" ||
+			fail "switch-sbr: switch DSP and route table wiped below the boundary (dsp $dctl rt $uctl)"
+		rctl=$(bi_ctrl "$rp")
+		[ $(( rctl & 0x3 )) = 1 ] &&
+			ok "switch-sbr: RP keeps Forward above the boundary" ||
+			fail "switch-sbr: RP keeps Forward above the boundary ($rctl)"
+		g "dmesg -C" >/dev/null
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/unbind" >/dev/null
+		for i in $(seq 1 30); do
+			g "test -e /sys/bus/pci/devices/$ep/driver" || break
+		done
+		dm=$(g dmesg)
+		if ! grep -q "BI requests disabled" <<<"$dm" &&
+		   ! grep -qE "$SPLAT_RE" <<<"$dm"; then
+			ok "switch-sbr: unbind leaves the reset device alone, no splat"
+		else
+			fail "switch-sbr: unbind leaves the reset device alone, no splat"
+		fi
+		dctl=$(bi_ctrl "$dsp"); rctl=$(bi_ctrl "$rp")
+		[ $(( dctl & 0x3 )) = 0 ] && [ $(( rctl & 0x3 )) = 0 ] &&
+			ok "switch-sbr: unbind unwinds the DSP and the RP" ||
+			fail "switch-sbr: unbind unwinds the DSP and the RP (dsp $dctl rp $rctl)"
+		g "dmesg -C" >/dev/null
+		g "echo $ep > /sys/bus/pci/drivers/cxl_pci/bind" >/dev/null
+		for i in $(seq 1 40); do
+			g "test -e /sys/bus/cxl/devices/mem0/driver" && break
+			sleep 0.5
+		done
+		dm=$(g dmesg)
+		nc=$(grep -c 'BI-ID commit wait took' <<<"$dm")
+		if grep -q "BI requests enabled" <<<"$dm" &&
+		   ! grep -q "adopting firmware-enabled BI" <<<"$dm" &&
+		   [ "$nc" = 2 ]; then
+			ok "switch-sbr: rebind programs the switch from scratch ($nc commits)"
+		else
+			fail "switch-sbr: rebind programs the switch from scratch ($nc commits)"
+		fi
+		dctl=$(bi_ctrl "$dsp"); rctl=$(bi_ctrl "$rp"); ectl=$(bi_ctrl "$ep")
+		[ $(( dctl & 0x3 )) = 2 ] && [ $(( rctl & 0x3 )) = 1 ] &&
+		[ $(( ectl & 0x2 )) = 2 ] &&
+			ok "switch-sbr: path up again after the rebind" ||
+			fail "switch-sbr: path up again after the rebind (dsp $dctl rp $rctl ep $ectl)"
+		rd=$(g 'for d in /sys/bus/cxl/devices/decoder0.*; do
+			[ "$(cat $d/cap_back_invalidate 2>/dev/null)" = 1 ] &&
+				basename $d && break
+		done')
+		region=$(g "cat /sys/bus/cxl/devices/$rd/create_ram_region")
+		dec=$(g 'basename $(ls -d /sys/bus/cxl/devices/endpoint*/decoder*.0 | head -1)')
+		g "CXL=/sys/bus/cxl/devices; sz=\$((256 << 20));
+		   echo $region > \$CXL/$rd/create_ram_region;
+		   R=\$CXL/$region;
+		   echo 256 > \$R/interleave_granularity;
+		   echo 1 > \$R/interleave_ways;
+		   echo \$sz > \$R/size;
+		   echo ram > \$CXL/$dec/mode 2>/dev/null;
+		   echo \$sz > \$CXL/$dec/dpa_size;
+		   echo $dec > \$R/target0 && echo 1 > \$R/commit" >/dev/null
+		[ "$(g "cat /sys/bus/cxl/devices/$region/commit")" = 1 ] &&
+			ok "switch-sbr: HDM-DB region commits after the rebind" ||
+			fail "switch-sbr: HDM-DB region commits after the rebind"
+	fi
+fi
+dm=$(g dmesg)
+grep -qE "$SPLAT_RE" <<<"$dm" &&
+	fail "switch-sbr: no splat" || ok "switch-sbr: no splat"
+oracle_silent "switch-sbr"
+g dmesg > "$OUT/t27-switch-sbr.dmesg" 2>/dev/null
+
 exit $((FAIL != 0))
