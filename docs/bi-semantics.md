@@ -64,7 +64,7 @@ Three rules decide everything below.
    Enable and every level on its path is held. Otherwise the Enable is
    released by the binding that holds it, whether firmware or the
    driver set it. A failed walk never holds (section 4). (Code:
-   `cxl_hdm_bi_live()`, `cxl_bi_release()`.)
+   `cxl_hdm_bi_committed()`, `cxl_bi_release()`.)
 
 3. **A commit is owed when a level's BI-ID assignments change, never per
    register write.** Once for each device newly enabled below the level
