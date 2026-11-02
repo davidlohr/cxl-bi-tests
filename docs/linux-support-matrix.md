@@ -44,7 +44,7 @@ orthogonal to coherency and omitted below.
 | 0 | 1 | 0 | kept | HDM-H | HDM-H only |
 | 1 | 1 | 0 | kept | HDM-H | HDM-H or HDM-D, never both in one set |
 | 1 | 0 | 1 | kept | HDM-DB | HDM-DB only |
-| 0 | 0 | 1 | rejected at parse: "CFMWS BI requires device-coherent" | - | - |
+| 0 | 0 | 1 | rejected at parse: "CFMWS has no coherency model" | - | - |
 | x | 1 | 1 | rejected at parse: "CFMWS cannot have both HDM-H and HDM-DB" | - | - |
 
 Verified by: t13 (QEMU itself refuses Host-only with BI at launch; the

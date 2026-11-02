@@ -96,7 +96,9 @@ Tested: t13 (QEMU refuses it at launch).
 
 **Rule 2.3: bit 5 requires bit 0.** (Sacred rule 2.)
 HDM-DB is defined only as bit 0 together with bit 5.
-Linux: rejected at parse, "CFMWS BI requires device-coherent".
+Linux: rejected at parse by rule 2.1 or 2.2, whichever applies: "CFMWS
+has no coherency model" without bit 1, "CFMWS cannot have both HDM-H
+and HDM-DB" with it.
 Consequence: every BI window the kernel keeps exposes device-coherent
 memory and nothing else, so every region under a BI root is HDM-DB.
 
