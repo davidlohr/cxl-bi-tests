@@ -1808,6 +1808,9 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 		# recovery: rebind, BI from scratch, a region commits again
 		dmesg -C
 		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null
+		# let the endpoint teardown's deferred detach_memdev() drain
+		# before rebinding, or it releases the new binding (see arm 4)
+		sleep 0.5
 		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/bind 2>/dev/null
 		dec=$(wait_ep_bdf "$bdf" 60)
 		[ -n "$dec" ] && ok "endpoint back after the reset recovery" \
@@ -1832,7 +1835,7 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 	# device after programming the decoder and back it out.
 	v=$(creg "$bdf" bictrl)
 	if [ -z "$v" ]; then
-		skip_qemu_gap 7 "no /dev/mem MMIO for BI Decoder Control"
+		skip_qemu_gap 9 "no /dev/mem MMIO for BI Decoder Control"
 	else
 		R=$(create_region "$rd" 1 256 "$mem")
 		[ -n "$R" ] && ok "region attached with BI enabled" \
@@ -1855,7 +1858,27 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 			fail "no endpoint decoder left committed with BI (hdmbi=$v)"
 		fi
 		expect_eq "region left uncommitted" "$(cat "$CXL/$R/commit")" 0
+		# The refusal fails cxlds->bi closed, as .reset_done would:
+		# the still-attached decoder stops reporting HDM-DB, and a
+		# fresh HDM-DB attach is refused at attach, not at commit.
+		expect_eq "back_invalidate fails closed after the refusal" \
+			"$(cat "$CXL/$dec/back_invalidate")" 0
 		destroy_region "$R" "$rd"
+		dmesg -C
+		R=$(create_region "$rd" 1 256 "$mem")
+		if [ -n "$R" ]; then
+			fail "fresh HDM-DB attach refused after the refusal"
+			destroy_region "$R" "$rd"
+		else
+			check "fresh HDM-DB attach refused after the refusal" \
+				dmesg_saw "BI not enabled on device"
+			# drop the region create_region left without a target
+			for r in "$CXL/$rd"/region*; do
+				[ -e "$r/target0" ] || continue
+				[ -z "$(cat "$r/target0" 2>/dev/null)" ] &&
+					basename "$r" > "$CXL/$rd/delete_region" 2>/dev/null
+			done
+		fi
 		# let the endpoint teardown's deferred detach_memdev() drain
 		# before rebinding, or it releases the new binding (see arm 5)
 		echo "$mem" > /sys/bus/cxl/drivers/cxl_mem/unbind 2>/dev/null

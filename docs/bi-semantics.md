@@ -220,7 +220,8 @@ level.
 A region commit also re-reads the device's Enable from the hardware
 after programming each target, since a reset may not have reached
 `.reset_done` yet ("BI disabled by reset during commit", the target is
-undone).
+undone), and fails `cxlds->bi` closed the way `.reset_done` would, so
+a later HDM-DB attach is refused up front (t34 arm 4).
 
 ## 6. The spectrum
 
