@@ -619,7 +619,7 @@ else
 	g "echo $memA > /sys/bus/cxl/drivers/cxl_mem/unbind" >/dev/null
 	wait_mem_driver unbound $memA
 	read -r _ ectl _ <<<"$(bi_regs "$epA" 0xC)"
-	if ! g dmesg | grep -q "BI requests disabled" &&
+	if ! grep -q "BI requests disabled" <<<"$(g dmesg)" &&
 	   [ $(( ectl & 0x2 )) = 2 ]; then
 		ok "nested-hold: memA keeps BI Enable on unbind (decoder live)"
 	else
@@ -639,7 +639,7 @@ else
 	g "dmesg -C"
 	g "echo $memB > /sys/bus/cxl/drivers/cxl_mem/bind" >/dev/null
 	wait_mem_driver bound $memB
-	if [ "$(nbound)" = 1 ] && g dmesg | grep -q "BI requests enabled"; then
+	if [ "$(nbound)" = 1 ] && grep -q "BI requests enabled" <<<"$(g dmesg)"; then
 		ok "nested-hold: memB rebinds alone through re-created ports"
 	else
 		fail "nested-hold: memB rebinds alone through re-created ports"

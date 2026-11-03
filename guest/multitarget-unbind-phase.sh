@@ -215,13 +215,13 @@ expect_ctrl "post-unbind: leaving DSP cleared"        "$dsp_go"   0
 expect_ctrl "post-unbind: surviving DSP still Enable" "$dsp_stay" 2
 expect_ctrl "post-unbind: shared RP still Forward"    "$rpbdf"    1
 
-if dmesg | grep -qE "BI dport disable failed|BI setup failed"; then
+if grep -qE "BI dport disable failed|BI setup failed" <<<"$(dmesg)"; then
 	fail "no BI errors on member unbind"
 	dmesg | grep -E "BI dport|BI setup" | sed 's/^/# /'
 else
 	ok "no BI errors on member unbind"
 fi
-if dmesg | grep -qE "BUG:|WARNING:|KASAN|general protection|NULL pointer"; then
+if grep -qE "BUG:|WARNING:|KASAN|general protection|NULL pointer" <<<"$(dmesg)"; then
 	fail "no splat on member unbind"
 	dmesg | grep -E "BUG:|WARNING:|KASAN|general protection|NULL pointer" \
 		| head -5 | sed 's/^/# /'
@@ -259,7 +259,7 @@ fi
 ok "leaving memdev returned after rebind"
 expect_ctrl "post-rebind: DSP BI Enable restored" "$dsp_go" 2
 expect_ctrl "post-rebind: shared RP still Forward" "$rpbdf" 1
-if dmesg | grep -q "BI setup failed"; then
+if grep -q "BI setup failed" <<<"$(dmesg)"; then
 	fail "no 'BI setup failed' on rebind"
 	dmesg | grep "BI setup" | sed 's/^/# /'
 else

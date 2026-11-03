@@ -104,7 +104,7 @@ expect_eq "mem_keep bi=1 after partial unbind" \
 	"$(cat "$CXL/$dec_keep/back_invalidate")" 1
 expect_eq "mem_keep region still committed" \
 	"$(cat "$R/commit")" 1
-if dmesg | grep -qE "BI dport disable failed|BI setup failed"; then
+if grep -qE "BI dport disable failed|BI setup failed" <<<"$(dmesg)"; then
 	fail "no BI errors on partial unbind"
 	dmesg | grep -E "BI dport|BI setup" | sed 's/^/# /'
 else
@@ -126,13 +126,14 @@ if [ ! -e "$CXL/$mem_unbind" ]; then
 fi
 ok "mem_unbind memdev returned after rebind"
 
-if dmesg | grep -q "BI setup failed"; then
+if grep -q "BI setup failed" <<<"$(dmesg)"; then
 	fail "no 'BI setup failed' on rebind"
 	dmesg | grep "BI setup" | sed 's/^/# /'
 else
 	ok "no 'BI setup failed' on rebind"
 fi
-if dmesg | grep -qE "Failed to request region.*[Bb][iI]"; then
+# regs.c logs "Failed to request region <start>-<end>", nothing more.
+if grep -q "Failed to request region" <<<"$(dmesg)"; then
 	fail "no 'Failed to request region' on BI mapping (dport leak)"
 	dmesg | grep "Failed to request region" | sed 's/^/# /'
 else

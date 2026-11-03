@@ -148,10 +148,10 @@ expect_eq "cascade: region decommitted" \
 # cxl_bi_dealloc() runs from the endpoint port's devres release, which
 # can trail the sysfs directory going away - poll rather than assume.
 for i in $(seq 1 100); do
-	dmesg | grep -q "BI requests disabled" && break
+	grep -q "BI requests disabled" <<<"$(dmesg)" && break
 	sleep 0.1
 done
-if dmesg | grep -q "BI requests disabled"; then
+if grep -q "BI requests disabled" <<<"$(dmesg)"; then
 	ok "cascade: BI disabled on teardown"
 else
 	fail "cascade: BI disabled on teardown"
@@ -173,7 +173,7 @@ done
 [ ! -d "$CXL/$OUTER" ] && ok "cascade: empty outer port reaped" \
 	|| fail "cascade: empty outer port reaped"
 
-dmesg | grep -q "BI setup failed" && fail "cascade: no 'BI setup failed'" \
+grep -q "BI setup failed" <<<"$(dmesg)" && fail "cascade: no 'BI setup failed'" \
 	|| ok "cascade: no 'BI setup failed'"
 
 # ---- rebuild -------------------------------------------------------
@@ -186,7 +186,7 @@ if [ -n "$dec2" ]; then
 	ok "rebuild: endpoint decoder back after rebind ($dec2)"
 	# The capability probe re-ran on rebind and brought BI back up
 	# (dmesg was cleared before the unbind).
-	if dmesg | grep -q "BI requests enabled"; then
+	if grep -q "BI requests enabled" <<<"$(dmesg)"; then
 		ok "rebuild: BI re-enabled on re-probe"
 	else
 		fail "rebuild: BI re-enabled on re-probe"
@@ -251,7 +251,7 @@ fi
 # ---- hygiene -------------------------------------------------------
 for pat in "BUG:" "Oops" "kernel NULL pointer" "WARNING:" \
 	   "possible circular" "inconsistent lock" "use-after-free"; do
-	if dmesg | grep -q "$pat"; then
+	if grep -q "$pat" <<<"$(dmesg)"; then
 		fail "dmesg clean of '$pat'"
 		dmesg | grep "$pat" | head -2 | sed 's/^/# /'
 	else

@@ -130,7 +130,7 @@ echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
 # lifecycle hygiene: any ordering regression shows up here
 for pat in "BUG:" "Oops" "kernel NULL pointer" "WARNING:" \
 	   "possible circular" "inconsistent lock"; do
-	if dmesg | grep -q "$pat"; then
+	if grep -q "$pat" <<<"$(dmesg)"; then
 		fail "dmesg clean of '$pat'"
 		dmesg | grep "$pat" | head -2 | sed 's/^/# /'
 	else

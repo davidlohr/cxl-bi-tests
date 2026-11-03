@@ -232,7 +232,7 @@ else
 	else
 		ok "no-region: post-reset HDM-DB attach fails closed"
 	fi
-	if g dmesg | grep -q "BI not enabled on device"; then
+	if grep -q "BI not enabled on device" <<<"$(g dmesg)"; then
 		ok "no-region: refusal names the device gate"
 	else
 		fail "no-region: refusal names the device gate"

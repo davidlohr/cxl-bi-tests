@@ -185,7 +185,7 @@ fi
 echo 0 > "$CXL/$region/commit" 2>/dev/null
 echo "$region" > "$CXL/$rd/delete_region" 2>/dev/null
 
-if dmesg | grep -q "BI setup failed"; then
+if grep -q "BI setup failed" <<<"$(dmesg)"; then
 	fail "no 'BI setup failed' across unbind/rebind cycle"
 else
 	ok "no 'BI setup failed' across unbind/rebind cycle"
@@ -225,7 +225,7 @@ for i in $(seq 1 30); do
 	[ -e "$CXL/$mem/driver" ] || break
 	sleep 0.2
 done
-if dmesg | grep -q "BI requests disabled"; then
+if grep -q "BI requests disabled" <<<"$(dmesg)"; then
 	ok "port-cycle: BI disabled on endpoint port unbind"
 else
 	fail "port-cycle: BI disabled on endpoint port unbind"
@@ -263,7 +263,7 @@ if [ -n "$dec2" ]; then
 else
 	fail "port-cycle: endpoint decoder returned after rebind"
 fi
-if dmesg | grep -q "BI setup failed"; then
+if grep -q "BI setup failed" <<<"$(dmesg)"; then
 	fail "port-cycle: no 'BI setup failed'"
 else
 	ok "port-cycle: no 'BI setup failed'"
