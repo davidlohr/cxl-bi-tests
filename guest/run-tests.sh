@@ -24,9 +24,10 @@ CXL=/sys/bus/cxl/devices
 # One definition of "a splat", so enabling a new debug option does not
 # quietly go undetected. SPLAT_RE is every report the debug configs can
 # emit; UBSAN and "kernel BUG at" carry neither a BUG: nor a WARNING:
-# prefix, and the kmemleak lines catch the detector switching itself
-# off - which would otherwise read as a clean scan.
-SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate'
+# prefix, nor do hung-task, RCU stall and hard lockup reports, and the
+# kmemleak lines catch the detector switching itself off - which would
+# otherwise read as a clean scan.
+SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate|INFO: task .* blocked.* for more than|INFO: .*detected stall|detected hard LOCKUP'
 # BUG-class only, for checks that tolerate an expected WARNING.
 SPLAT_FATAL_RE='BUG:|Oops|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic'
 
@@ -1495,8 +1496,12 @@ t31)	# 4-way and 8-way HDM-DB interleave under one switch, then the
 	else
 		expect_eq "RP still Forward after seven releases" "$((v & 3))" 1
 	fi
-	expect_eq "surviving endpoint still in BI" \
-		"$(bis "$(ep_decoder_for_mem "$(mem_for_bdf "${bdfs[7]}")")")" 0
+	v=$(creg "${bdfs[7]}" bictrl)
+	if [ -z "$v" ]; then
+		skip_qemu_gap 1 "no /dev/mem MMIO for endpoint BI Decoder readback"
+	else
+		expect_eq "surviving endpoint keeps BI Enable" "$((v & 2))" 2
+	fi
 	if dmesg | grep -qE "BI dport disable failed|BI setup failed|$SPLAT_RE"; then
 		fail "no BI errors across seven releases"
 	else
@@ -1798,11 +1803,16 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 			ok "commit refused after the reset"
 		fi
 		check "refusal names the device" dmesg_saw "BI not enabled on device"
-		v=$(creg "$bdf" hdmbi)
-		if [ -z "$v" ]; then
-			ok "no endpoint decoder committed with BI"
+		# empty hdmbi means nothing committed only if /dev/mem works
+		if [ -z "$(creg "$bdf" bictrl)" ]; then
+			skip_qemu_gap 1 "no /dev/mem MMIO for HDM readback"
 		else
-			fail "no endpoint decoder committed with BI (hdmbi=$v)"
+			v=$(creg "$bdf" hdmbi)
+			if [ -z "$v" ]; then
+				ok "no endpoint decoder committed with BI"
+			else
+				fail "no endpoint decoder committed with BI (hdmbi=$v)"
+			fi
 		fi
 		destroy_region "$R" "$rd"
 		# recovery: rebind, BI from scratch, a region commits again
@@ -1901,9 +1911,9 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 	# deterministic reproducer lives in cxl-bi-repro.
 	v=$(creg "$bdf" bictrl)
 	if [ -z "$v" ]; then
-		skip_qemu_gap 3 "no /dev/mem MMIO for BI Decoder Control"
+		skip_qemu_gap 4 "no /dev/mem MMIO for BI Decoder Control"
 	elif ! echo cxl_bus > "/sys/bus/pci/devices/$bdf/reset_method" 2>/dev/null; then
-		skip_qemu_gap 3 "no cxl_bus reset method"
+		skip_qemu_gap 4 "no cxl_bus reset method"
 	else
 		passes=10
 		mismatch=0; refused=0; timedout=0; flagged=0; other=0; n=0
@@ -1943,6 +1953,7 @@ t34)	# a refused attach must leave the decoder alone; BI dealloc must
 			[ -n "$dec" ] || break
 		done
 		echo "# arm 5: $n passes: refused=$refused timedout=$timedout flagged=$flagged other=$other mismatch=$mismatch"
+		expect_eq "all $passes commit/reset race passes ran" "$n" "$passes"
 		expect_eq "no decoder committed with BI on a device with BI Enable=0 ($n passes)" \
 			"$mismatch" 0
 		expect_eq "no splat across the commit/reset races" "$splats" 0
