@@ -22,6 +22,10 @@
 #     a member of the committed 2-way region, so the teardown runs
 #     cxl_region_decode_reset() over every target and walks a dport
 #     the surviving peer still holds.
+#   - Phase 4 (multi-target commit undo) clears BI Enable on the
+#     second member between attach and commit: the first commits and
+#     passes its re-check, the second fails it, and the undo must reset
+#     both, the shared USP decoder included.
 BI_TESTS_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
 source "$BI_TESTS_DIR/topo-lib.sh"
 

@@ -259,6 +259,20 @@ run_suite() { # run_suite <topo-script> <suite>
 		[ "$rc3" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
 
+	# t5 phase 4 clears BI Enable on the second member of a 2-way
+	# HDM-DB region between attach and commit: the commit re-check
+	# must undo BOTH targets, including the one that already passed.
+	if [ "$suite" = t5 ] && [ "$rc" -eq 0 ]; then
+		echo "--- t5 phase 4: multi-target commit undo ---"
+		guest_scp "$BI_TESTS_DIR/guest/multitarget-undo-phase.sh" \
+			  root@localhost:/tmp/ >/dev/null
+		guest_ssh "dmesg -C; bash /tmp/multitarget-undo-phase.sh" \
+			| tee "$OUT/t5-mtundo.tap"
+		local rc4=${PIPESTATUS[0]}
+		guest_ssh dmesg > "$OUT/t5-mtundo.dmesg" 2>/dev/null
+		[ "$rc4" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+	fi
+
 	[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
 
 	# The qemu BI oracle (-d guest_errors, "CXL BI oracle" messages)
