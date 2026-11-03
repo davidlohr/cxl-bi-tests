@@ -64,6 +64,68 @@ kmemleak_scan() {
 	fi
 }
 
+# splat_t28_known <console>
+# The one known upstream lockdep t28 surfaces, tolerated as t28's own
+# splat_check does: every splat line is that circular locking report
+# and the chain runs through cxl_error_detected(). AER recovery takes
+# pci_bus_sem then the memdev lock, inverting the probe order; no BI
+# code in any chain.
+splat_t28_known() {
+	local c=$1 n k
+	n=$(grep -cE -- "$SPLAT_RE" <<<"$c")
+	k=$(grep -c "WARNING: possible circular locking" <<<"$c")
+	[ "$n" = "$k" ] && grep -q "cxl_error_detected" <<<"$c"
+}
+
+# console_scan <suite>
+# Scan every boot's serial console, kept by launch_qemu, for kernel
+# splats. It is the only record of the boot window and of what a
+# suite's dmesg -C calls discarded, which the in-guest checks and
+# $suite.dmesg never see. Kernel records only, wherever the timestamp
+# starts: userspace writes to the console too, without a newline after
+# a login prompt or a partial status line.
+console_scan() {
+	local suite=$1 f c hits nb=0
+	local diag=$OUT/$suite.splats
+	: > "$diag"
+	for f in "$CONSOLE_ARCHIVE"/boot.*.log; do
+		[ -f "$f" ] || continue
+		nb=$((nb+1))
+		c=$(grep -aoE '\[ *[0-9]+\.[0-9]+\] .*' "$f")
+		hits=$(grep -E -- "$SPLAT_RE" <<<"$c")
+		[ -n "$hits" ] || continue
+		if [ "$suite" = t28 ] && splat_t28_known "$c"; then
+			echo "# console $(basename "$f"): known upstream AER lockdep only"
+			continue
+		fi
+		{ echo "$(basename "$f"):"; head -20 <<<"$hits"; } >> "$diag"
+	done
+	if [ -s "$diag" ]; then
+		echo "serial console splat(s):"; sed 's/^/  /' "$diag"
+		tap_fold_fail "$OUT/$suite.tap" "no splat on the serial console" "$diag"
+		TOTAL_FAIL=$((TOTAL_FAIL+1))
+	else
+		rm -f "$diag"
+		echo "# console: no splat across $nb boot(s)"
+	fi
+}
+
+# devmem_guard <suite>
+# Register checks SKIP when /dev/mem is unusable (CONFIG_IO_STRICT_DEVMEM,
+# lockdown), and a SKIP counts as a pass, so a config change would turn
+# every register check into a pass unnoticed. Fail the suite instead,
+# unless the run has no /dev/mem by design (ALLOW_DEVMEM_SKIP=1).
+devmem_guard() {
+	local suite=$1 d=$RUNDIR/devmem.diag
+	[ "${ALLOW_DEVMEM_SKIP:-0}" = 1 ] && return 0
+	grep -hE '^ok [0-9]+ - .*# SKIP .*/dev/mem' "$OUT/$suite.tap" \
+		"$OUT/$suite"-*.tap > "$d" 2>/dev/null
+	[ -s "$d" ] || return 0
+	echo "$(wc -l < "$d") register check(s) skipped for lack of /dev/mem"
+	tap_fold_fail "$OUT/$suite.tap" "register checks ran (/dev/mem usable)" "$d"
+	TOTAL_FAIL=$((TOTAL_FAIL+1))
+}
+
 # tap_verdict <tapfile>
 # Echo a suite's final plan and summary. Called once the host-side
 # checks have been folded in: the guest writes its own trailer before
@@ -76,19 +138,41 @@ tap_verdict() {
 run_suite() { # run_suite <topo-script> <suite>
 	local topo=$1 suite=$2
 	echo "=== $suite ($(basename "$topo")) ==="
+	# every boot of this suite keeps its serial console here
+	export CONSOLE_ARCHIVE=$OUT/$suite.console
+	rm -rf "$CONSOLE_ARCHIVE"
+	rm -f "$CONSOLE_LOG"
+	# a previous run's phase results would otherwise be read as this
+	# run's when the phases do not run
+	rm -f "$OUT/$suite"-*.tap "$OUT/$suite"-*.dmesg "$OUT/$suite.splats" \
+	      "$OUT/$suite.kmemleak"
 
 	# Host-only suites (t13 etc.) run the topology script directly on
 	# the host and emit TAP without booting a guest.
 	if [[ "$HOST_ONLY_SUITES" == *" $suite "* ]]; then
-		"$topo" | tee "$OUT/$suite.tap"
+		# the trailer is replayed by tap_verdict once the host-side
+		# checks are folded in, as for guest suites below
+		"$topo" | tee "$OUT/$suite.tap" \
+			| grep --line-buffered -Ev '^1\.\.|^# passed: '
 		local rc=${PIPESTATUS[0]}
 		[ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1))
+		stop_qemu
+		console_archive
+		console_scan "$suite"
+		devmem_guard "$suite"
+		tap_verdict "$OUT/$suite.tap"
 		return
 	fi
 
-	"$topo" || { echo "launch failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return; }
+	# a boot that never came up is the one most likely to hold a panic:
+	# keep and scan its console too
+	if ! "$topo"; then
+		echo "launch failed"; TOTAL_FAIL=$((TOTAL_FAIL+1))
+		stop_qemu; console_archive; console_scan "$suite"; return
+	fi
 	if ! wait_for_guest 180; then
-		echo "guest boot failed"; TOTAL_FAIL=$((TOTAL_FAIL+1)); return
+		echo "guest boot failed"; TOTAL_FAIL=$((TOTAL_FAIL+1))
+		stop_qemu; console_archive; console_scan "$suite"; return
 	fi
 	guest_scp "$BI_TESTS_DIR/guest/run-tests.sh" root@localhost:/tmp/ \
 		>/dev/null
@@ -194,9 +278,12 @@ run_suite() { # run_suite <topo-script> <suite>
 			      "$RUNDIR/oracle.diag"
 		TOTAL_FAIL=$((TOTAL_FAIL+1))
 	fi
+	devmem_guard "$suite"
 	kmemleak_scan "$suite"
-	tap_verdict "$OUT/$suite.tap"
 	stop_qemu
+	console_archive
+	console_scan "$suite"
+	tap_verdict "$OUT/$suite.tap"
 }
 
 # suite -> topology script
@@ -253,15 +340,22 @@ ORDER="t1 t2 t5 t3 t4 t6 t7 t8 t35 t9 t10 t11 t12 t14 t15 t19 t20 t31 t32 t33 t3
 #   ./run-all.sh t2          # one suite (incl. its unbind/rebind phase)
 #   ./run-all.sh t4 t8       # a subset
 SUITES="${*:-$ORDER}"
+FAILED=
 for s in $SUITES; do
 	topo=${TOPO[$s]}
 	if [ -z "$topo" ]; then
 		echo "unknown suite '$s' (choices: $ORDER)" >&2
 		exit 2
 	fi
+	# run_suite counts every finding; a suite fails once
+	before=$TOTAL_FAIL
 	run_suite "$BI_TESTS_DIR/topos/$topo" "$s"
+	if [ "$TOTAL_FAIL" -gt "$before" ]; then
+		TOTAL_FAIL=$((before + 1))
+		FAILED="$FAILED $s"
+	fi
 done
 
 echo "==================================================="
-echo "suites failed: $TOTAL_FAIL (results in $OUT)"
+echo "suites failed: $TOTAL_FAIL${FAILED:+ (${FAILED# })} (results in $OUT)"
 exit $((TOTAL_FAIL != 0))

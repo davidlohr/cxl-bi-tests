@@ -62,7 +62,7 @@ for confirming it on Type 3 hardware is
 | **t2** | Endpoint under DSP + USP + RP, BI CFMWS | BI enables through the full DSP + USP + RP walk; an HDM-DB region commits. Phase 2 verifies `cxl_bi_dealloc` on unbind and a fresh `cxl_bi_setup` on rebind. |
 | **t3** | BI-capable endpoint, non-BI CFMWS | No BI root decoder is created; an HDM-H region commits with the endpoint at `bi=0`, while BI setup (window-independent) still enables the path. |
 | **t4** | Non-BI endpoint (`hdm-db` off), BI CFMWS | Region attach rejects with "BI not enabled on device". |
-| **t5** | Two BI endpoints sharing one switch and one RP, BI CFMWS | A 2-way HDM-DB region commits with both endpoints in BI. Phase 2 verifies the shared RP keeps BI enabled while any child still needs it (`nr_bi` refcount) and that rebinding one endpoint does not leak the dport BI Decoder mapping. |
+| **t5** | Two BI endpoints sharing one switch and one RP, BI CFMWS | A 2-way HDM-DB region commits with both endpoints in BI. Phase 2 verifies the shared RP keeps BI enabled while any child still needs it (`nr_bi` refcount) and that rebinding one endpoint does not leak the dport BI Decoder mapping. Phase 3 unbinds a member of the committed region. Phase 4 clears BI Enable behind the driver on the region's second member between attach and commit: the commit-time re-check must refuse, and its undo reset both members and the shared USP decoder by register readback, with only the second member failing closed. |
 | **t6** | Switch USP with `hdm-db`, BI RT optional per §8.2.4.26 | Exercises the "USP BI RT is optional" branch in `cxl_is_bi_capable()`. Same visible result as t2 pending a QEMU knob to suppress BI RT on a switch USP. |
 | **t7** | RP not in 256B Flit, BI CFMWS | `cxl_bi_setup` must bail at the RP hop. Emits TAP `# SKIP` today — see Known limitations. |
 | **t8** | DSP not in 256B Flit ("68b DSP"), BI CFMWS | `cxl_bi_setup` must bail at the DSP hop (a CXL 4.0 §9.14.3 mixed configuration). Emits TAP `# SKIP` today — see Known limitations. |
@@ -109,6 +109,10 @@ Environment variables consumed by `topo-lib.sh`:
 | `RUNDIR` | `/tmp/cxl-bi-tests` | Work directory (console log, qmp socket, results). |
 | `OUT` | `$RUNDIR/results` | Results directory (`<suite>.tap`, `<suite>.dmesg`). |
 
+`run-all.sh` also reads `ALLOW_DEVMEM_SKIP`: set it to `1` on a guest
+without usable `/dev/mem` (e.g. `CONFIG_IO_STRICT_DEVMEM`), where the
+register checks can only SKIP. By default such a SKIP fails the suite.
+
 Guest requirements: DHCP on `enp0s2` (first NIC), root SSH via
 public-key authentication, and `dmesg` readable by root.
 
@@ -138,13 +142,31 @@ guest_ssh "bash /tmp/run-tests.sh t2"
 Each suite writes `<suite>.tap` (TAP output on stdout) and
 `<suite>.dmesg` (full kernel log after the run) to `$OUT`. Suites
 `t2`, `t5` and `t9` additionally emit `t2-unbindrebind.{tap,dmesg}`,
-`t2-lifecycle.{tap,dmesg}`, `t5-nrbi.{tap,dmesg}` and
+`t2-lifecycle.{tap,dmesg}`, `t5-nrbi.{tap,dmesg}`,
+`t5-mtunbind.{tap,dmesg}`, `t5-mtundo.{tap,dmesg}` and
 `t9-cascade.{tap,dmesg}` for their phase helpers (t2 phase 3 races a
 decoder-attribute reader against repeated committed-region unbinds to
 pin the endpoint-vs-cxlds teardown orderings; t9 phase 2 covers the
 mid-level switch-port unbind cascade). The host-driven multi-boot
 suites (t23, t24, t25, t27) write one `<suite>-<scenario>.dmesg` per
 boot instead of a single combined log.
+
+Every boot's serial console is kept as
+`<suite>.console/boot.<n>.log`. After each suite the host folds its
+own findings into `<suite>.tap`, so the file cannot read `failed: 0`
+over them:
+
+- the QEMU BI oracle must stay silent;
+- no splat (`SPLAT_RE` in `topo-lib.sh`, which includes hung-task, RCU
+  stall and hard lockup reports) may appear on any console - the only
+  record of the boot window and of what a suite's `dmesg -C` discarded.
+  The matching lines go to `<suite>.splats`. t28's known upstream AER
+  lockdep is tolerated, as t28 itself does;
+- no register check may have SKIPped for lack of `/dev/mem`, unless
+  `ALLOW_DEVMEM_SKIP=1`.
+
+kmemleak's report, if any, is kept as `<suite>.kmemleak` but is
+evidence to read rather than a verdict.
 
 ## Diagnostics
 

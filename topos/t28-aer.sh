@@ -188,10 +188,12 @@ fi
 ok "aer: kernel AER + CXL_RAS present"
 
 ec=$(bi_ctrl "$ep")
-if [ -n "$ec" ] && [ $(( ec & 0x2 )) != 0 ]; then
+if [ -z "$ec" ]; then
+	skip "aer: BI enabled at probe (no /dev/mem)"
+elif [ $(( ec & 0x2 )) != 0 ]; then
 	ok "aer: BI enabled at probe"
 else
-	skip "aer: BI enabled at probe (no /dev/mem readback: '$ec')"
+	fail "aer: BI enabled at probe (BI Decoder Control $ec)"
 fi
 
 g "dmesg -C" >/dev/null

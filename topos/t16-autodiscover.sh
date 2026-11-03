@@ -143,8 +143,10 @@ if v == 0x2:
 del reg
 m.close(); os.close(fd)
 PYEOF' 2>/dev/null)
-	if [ "$RPCTL" != 0x2 ]; then
-		skip "bi: oracle fires on illegal RP program (ctrl readback ${RPCTL:-none})"
+	if [ -z "$RPCTL" ]; then
+		skip "bi: oracle fires on illegal RP program (no /dev/mem)"
+	elif [ "$RPCTL" != 0x2 ]; then
+		skip "bi: oracle fires on illegal RP program (ctrl readback $RPCTL)"
 	elif sleep 1; [ "$(grep -c "both set" "$RUNDIR/qemu.log" 2>/dev/null)" -gt 0 ]; then
 		ok "bi: oracle fires on illegal RP program"
 	else

@@ -7,9 +7,10 @@
 # One definition of "a splat", so enabling a new debug option does not
 # quietly go undetected. SPLAT_RE is every report the debug configs can
 # emit; UBSAN and "kernel BUG at" carry neither a BUG: nor a WARNING:
-# prefix, and the kmemleak lines catch the detector switching itself
-# off - which would otherwise read as a clean scan.
-SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate'
+# prefix, nor do hung-task, RCU stall and hard lockup reports, and the
+# kmemleak lines catch the detector switching itself off - which would
+# otherwise read as a clean scan.
+SPLAT_RE='BUG:|Oops|WARNING:|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic|INFO: trying to register non-static key|kmemleak: Kernel memory leak detector disabled|kmemleak: Cannot allocate|INFO: task .* blocked.* for more than|INFO: .*detected stall|detected hard LOCKUP'
 # BUG-class only, for checks that tolerate an expected WARNING.
 SPLAT_FATAL_RE='BUG:|Oops|UBSAN:|kernel BUG at|Unable to handle|general protection|Kernel panic'
 
@@ -25,6 +26,9 @@ RUNDIR=${RUNDIR:-/tmp/cxl-bi-tests}
 QMPSOCK=$RUNDIR/qmp-sock
 CONSOLE_LOG=$RUNDIR/console.log
 PIDFILE=$RUNDIR/qemu.pid
+# Set by run-all per suite: every boot's serial console is kept there
+# for its splat scan (see console_archive).
+CONSOLE_ARCHIVE=${CONSOLE_ARCHIVE:-}
 
 # Serialize harness instances: concurrent runs share SSHPORT and the
 # pidfile, and stop_qemu kills by port pattern - two runs shred each
@@ -55,6 +59,7 @@ $EXTRA_APPEND"
 # Boots in background; console to $CONSOLE_LOG, qmp on $QMPSOCK.
 launch_qemu() {
 	stop_qemu
+	console_archive
 	rm -f "$CONSOLE_LOG" "$RUNDIR/qemu.log"
 	"$QEMU" -smp 4 -m 4G -cpu host \
 		-drive file="$IMG" \
@@ -94,6 +99,17 @@ stop_qemu() {
 		sleep 0.5
 	done
 	true
+}
+
+# console_archive: move the last boot's serial console into
+# $CONSOLE_ARCHIVE before the next launch overwrites it. The console
+# holds everything the guest kernel printed (ignore_loglevel), so it is
+# the only record of the boot window and of whatever a suite's dmesg -C
+# discarded. No-op outside run-all.
+console_archive() {
+	[ -n "$CONSOLE_ARCHIVE" ] && [ -s "$CONSOLE_LOG" ] || return 0
+	mkdir -p "$CONSOLE_ARCHIVE"
+	mv "$CONSOLE_LOG" "$CONSOLE_ARCHIVE/boot.$(ls "$CONSOLE_ARCHIVE" | wc -l).log"
 }
 
 guest_ssh() {
