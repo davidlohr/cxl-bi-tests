@@ -27,10 +27,13 @@ the behaviour of the v10 series; "spec" means CXL 4.0.
   reserved there), counts as committed.
 - *Release* is the one routine run at unbind and on a failed walk; the
   table's Unbind column is release at unbind. Quoted strings are the
-  driver's dmesg lines; apart from "BI already disabled in hardware"
-  (error), "BI disabled by reset" (warning) and the commit-wait errors
-  ("BI-ID commit rejected by hardware", "BI-ID commit timed out"), they
-  are debug lines, visible with dynamic debug on cxl_core.
+  driver's dmesg lines. Errors: "BI already disabled in hardware", "BI
+  disabled by reset during commit", "BI not enabled on device" at
+  commit (at attach it is a debug line) and the commit-wait errors
+  ("BI-ID commit rejected by hardware", "BI-ID commit timed out").
+  Warnings: "BI disabled by reset", "BI with host-only" and "path not
+  BI capable". Everything else is a debug line, visible with dynamic
+  debug on cxl_core.
 - A *locked* decoder has Lock On Commit set (Table 8-123 bit 8) and is
   read-only once committed; a *locked region* is one assembled on a
   locked decoder, which the driver never resets.
