@@ -161,7 +161,8 @@ over them:
   stall and hard lockup reports) may appear on any console - the only
   record of the boot window and of what a suite's `dmesg -C` discarded.
   The matching lines go to `<suite>.splats`. t28's known upstream AER
-  lockdep is tolerated, as t28 itself does;
+  lockdep is tolerated, as t28 itself does, and so is t17's known
+  upstream pciehp lockdep;
 - no register check may have SKIPped for lack of `/dev/mem`, unless
   `ALLOW_DEVMEM_SKIP=1`.
 
@@ -196,6 +197,15 @@ Failures map to specific root causes:
   CONFIG_CXL_RAS (which needs ACPI_APEI_GHES) for the bounce path to
   exist at all - without them cxl_error_detected is a stub and recovery
   silently degrades to a bare link reset.
+- t17 surfaces a pre-existing upstream lockdep in pciehp:
+  `pciehp_configure_device()` takes `pci_rescan_remove_lock` and then
+  re-acquires `ctrl->reset_lock` as a reader, while `pciehp_reset_slot()`,
+  the only writer, never takes `pci_rescan_remove_lock`, so the reported
+  cycle cannot deadlock. No CXL code in either chain; the console scan
+  tolerates it and fails on any other splat. On current mainline t17 also
+  trips an upstream auto-assembly WARN at region detach unless the posted
+  fix "cxl/region: Restore a target's position from its sorted slot" is
+  applied.
 - No BISnp/BIRsp emulation in QEMU. Commit-timeout injection has no
   QEMU knob either: t21 stages it with a local QEMU modification that
   latches the BI commit past the advertised 2s timeout, and records

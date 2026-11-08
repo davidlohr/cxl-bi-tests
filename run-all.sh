@@ -77,6 +77,21 @@ splat_t28_known() {
 	[ "$n" = "$k" ] && grep -q "cxl_error_detected" <<<"$c"
 }
 
+# splat_t17_known <console>
+# The one known upstream lockdep t17 surfaces: every splat line is that
+# circular locking report and the chain runs through
+# pciehp_configure_device(), which takes pci_rescan_remove_lock and then
+# re-acquires ctrl->reset_lock as a reader. The only writer,
+# pciehp_reset_slot(), never takes pci_rescan_remove_lock, so the cycle
+# cannot deadlock; no CXL code in either chain.
+splat_t17_known() {
+	local c=$1 n k
+	n=$(grep -cE -- "$SPLAT_RE" <<<"$c")
+	k=$(grep -c "WARNING: possible circular locking" <<<"$c")
+	[ "$n" = "$k" ] && grep -q "pciehp_configure_device" <<<"$c" &&
+		grep -q "reset_lock" <<<"$c"
+}
+
 # console_scan <suite>
 # Scan every boot's serial console, kept by launch_qemu, for kernel
 # splats. It is the only record of the boot window and of what a
@@ -96,6 +111,10 @@ console_scan() {
 		[ -n "$hits" ] || continue
 		if [ "$suite" = t28 ] && splat_t28_known "$c"; then
 			echo "# console $(basename "$f"): known upstream AER lockdep only"
+			continue
+		fi
+		if [ "$suite" = t17 ] && splat_t17_known "$c"; then
+			echo "# console $(basename "$f"): known upstream pciehp lockdep only"
 			continue
 		fi
 		{ echo "$(basename "$f"):"; head -20 <<<"$hits"; } >> "$diag"
